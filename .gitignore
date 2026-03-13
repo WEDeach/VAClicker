@@ -1,0 +1,15 @@
+.dumps
+.github
+.logs
+logs
+__pycache__
+*.pyc
+*.pyo
+
+assets/Sprite
+scripts/test
+tests/samples
+tests/*.py
+
+.venv
+test_*.py

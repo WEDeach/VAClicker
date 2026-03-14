@@ -27,6 +27,10 @@ class ChestAction(AI):
 
     def reset_select_index(self):
         self._select_index = self.select_index
+        state.logger.debug(
+            "reset_select_index called, setting to #%d",
+            self._select_index,
+        )
 
     def check(self) -> bool:
         _screen = get_window_screen()

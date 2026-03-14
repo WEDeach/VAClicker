@@ -22,7 +22,7 @@ class DungeonView(AI):
         _match = match_template(
             _screen,
             _temp,
-            0.8,
+            0.7,
             False,
             _mask,
             region=(0.3, 0.7, 0, 1),
@@ -36,9 +36,10 @@ class DungeonView(AI):
                     state.logger.info("嘗試回旅館休息...")
                     click_by_gamepad(vgamepad.XUSB_BUTTON.XUSB_GAMEPAD_B)
                     time.sleep(self.delay_need_ret_inn)
-            else:
-                chest_action = self.find(ChestAction)
-                if chest_action:
-                    chest_action.reset_select_index()
+
+            chest_action = self.find(ChestAction)
+            if chest_action:
+                chest_action.reset_select_index()
+
             return True
         return False

@@ -138,7 +138,7 @@ class TownView(AI):
                     False,
                     None,
                     ocr_check=[("點擊後關閉", 0)],
-                    region=(0.44, 0.57, 0.60, 0.64),
+                    region=(0.44, 0.57, 0.61, 0.67),
                 )
                 if match_skill:
                     loc_skill, score_skill = match_skill

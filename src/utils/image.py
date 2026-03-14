@@ -9,6 +9,7 @@ from ..ocr import parse_ocr_texts
 from .shared import state
 
 logger = state.logger
+BASE_W, BASE_H = 1920, 1080
 
 
 def load_template(template_name: str, *, grayscale: bool):
@@ -63,6 +64,9 @@ def match_template(
         y2 = int(y2 * h)
         haystack_proc = haystack_proc[y1:y2, x1:x2]
     if template is not None:
+        template, use_mask = normalize_template(
+            template, use_mask, screen_size=haystack.shape[:2]
+        )
         result = cv2.matchTemplate(
             haystack_proc, template, cv2.TM_CCOEFF_NORMED, mask=use_mask
         )
@@ -94,6 +98,11 @@ def match_template(
         else:
             r = haystack[y1:y2, x1:x2]
         texts = "\n".join(parse_ocr_texts(state.ocr.predict(r)))
+        if log_score:
+            cv2.imshow("haystack", haystack)
+            cv2.imshow("OCR Check Region", r)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
         for text, score in ocr_check:
             found = (
                 bool(text.search(texts)) if isinstance(text, Pattern) else text in texts
@@ -110,11 +119,32 @@ def match_template(
                 f"[OCR] Failed: texts={texts}, ocr_check={ocr_check}, "
                 f"max_val={max_val:.4f} at {max_loc}"
             )
-            cv2.imshow("haystack", haystack)
-            cv2.imshow("OCR Check Region", r)
-            cv2.waitKey(0)
-            cv2.destroyAllWindows()
         return None
     if max_val >= threshold:
         return max_loc, max_val
     return None
+
+
+def normalize_template(
+    template: np.ndarray, mask: Optional[np.ndarray], *, screen_size: Tuple[int, int]
+) -> np.ndarray:
+    sh, sw = screen_size
+    if sh == BASE_H and sw == BASE_W:
+        return template, mask
+
+    h, w = template.shape[:2]
+    scale_x = sw / BASE_W
+    scale_y = sh / BASE_H
+    scale = min(scale_x, scale_y)
+    new_w = max(1, int(w * scale))
+    new_h = max(1, int(h * scale))
+    logger.debug(
+        "normalize_template: "
+        f"screen_size={screen_size}, original_template_size={(w, h)}, "
+        f"scale=({scale_x:.4f}, {scale_y:.4f}), new_template_size=({new_w}, {new_h})",
+    )
+    resized = cv2.resize(template, (new_w, new_h))
+    resized_mask = None
+    if mask is not None:
+        resized_mask = cv2.resize(mask, (new_w, new_h))
+    return resized, resized_mask

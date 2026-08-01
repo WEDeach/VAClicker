@@ -38,8 +38,11 @@ class Return(AI):
             point = calculate_click_point(loc, (_tmpl.shape[1], _tmpl.shape[0]))
             click_at(point)
             time.sleep(self.delay_return)
-            self.current_battle_num += 1
-            if self.current_battle_num >= self.max_battle_num:
-                self.need_ret_inn = True
+            self.increment_battle()
             return True
         return False
+
+    def increment_battle(self) -> None:
+        self.current_battle_num += 1
+        if self.current_battle_num >= self.max_battle_num:
+            self.need_ret_inn = True

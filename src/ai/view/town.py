@@ -21,9 +21,11 @@ class TownView(AI):
         delay_inn_stay_dialog: float = 5.0,
         delay_inn_exit: float = 5.0,
         delay_dungeon_entry: float = 5.0,
+        enable_dungeon: bool = True,
     ):
         super().__init__()
 
+        self.enable_dungeon = enable_dungeon
         self.delay_inn_entry = delay_inn_entry
         self.delay_inn_stay = delay_inn_stay
         self.delay_inn_stay_select = delay_inn_stay_select
@@ -57,7 +59,7 @@ class TownView(AI):
                 time.sleep(self.delay_inn_entry)
                 self.check_inn_stay()
 
-            if not _return.need_ret_inn:
+            if not _return.need_ret_inn and self.enable_dungeon:
                 return self.check_dungeon()
         return False
 

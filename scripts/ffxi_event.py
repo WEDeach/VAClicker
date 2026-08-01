@@ -1,3 +1,20 @@
+"""FFXI Event.
+
+前置條件:
+ - 畫面 1920x1080 | 遊戲亮度 100%
+ - 戰鬥中自動模式請使用 1 (用於自動開啟) | 倍速需要手動開啟
+ - 活動地圖請先完整開圖 至少到3F, 如果你只想單刷1F 請自行更改 DUNGEON_SELECT_TARGET
+ - 如果你想要調整開寶箱角色順位 請自行更改 CHEST_SELECT_INDEX
+ - 回復的選項建議打開 "優先使用道具" 以免道具占用
+ - 同上, 建議打開物資補充功能, 並使用 "替換" 並確保有足夠空間
+ - 同上, 建議打開物資補充功能中的 "回旅館時補充" 選項
+ - 非常重要: 請務必進入地圖內設置"標記"在出口位置, 每層樓都要設置
+
+運作流程:
+ - 腳本採用倒走方式運作, 先探寶箱 -> 使用標記至出口 (3F > 2F > 1F > 入口)
+ - 最多進入地圖3次, 之後會回旅館休息, 次數可修改 BATTLE_MAX_COUNT
+"""
+
 import time
 
 import vgamepad
@@ -34,6 +51,7 @@ CHEST_SELECT_INDEX = 2  # 開寶箱角色順位 從0開始
 WORLD_MAP_STATE = {"scrolls": 0}
 FFXI_TOWN_STATE = {"event_done": False}
 FFXI_IN_DUNGEON = False
+BATTLE_MAX_COUNT = 3  # 回旅館前的最大進入地圖次數
 
 CHEST_OPEN_PATTERN = "打開\n\\w*?都不做"
 HEALTH_CHECK_TEXT = "意志力"
@@ -79,7 +97,7 @@ EYES = {
     "text_with_auto": TextWithAuto(),
     "chest_action": ChestAction(select_index=CHEST_SELECT_INDEX),
     "chest_path": ChestPath(),
-    "return": Return(need_ret_inn=False),
+    "return": Return(need_ret_inn=False, max_battle_num=BATTLE_MAX_COUNT),
     "recovery": Recovery(),
     "auto_mode": AutoMode(
         template="ICON_auto_icon.png",

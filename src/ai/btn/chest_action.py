@@ -146,4 +146,5 @@ class ChestAction(AI):
             click_at(point)
             time.sleep(self.delay_chest_unlock)
             self.last_unlock_time = time.time()
+            return True
         return False

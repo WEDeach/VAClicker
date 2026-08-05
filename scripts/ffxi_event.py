@@ -3,7 +3,7 @@
 前置條件:
  - 畫面 1920x1080 | 遊戲亮度 100%
  - 戰鬥中自動模式請使用 1 (用於自動開啟) | 倍速需要手動開啟
- - 活動地圖請先完整開圖 至少到3F, 如果你只想單刷1F 請自行更改 DUNGEON_SELECT_TARGET
+ - 活動地圖請先完整開圖 至少到3F, 如果你只想單刷1F/5F 請自行更改 DUNGEON_SELECT_TARGET
  - 如果你想要調整開寶箱角色順位 請自行更改 CHEST_SELECT_INDEX
  - 回復的選項建議打開 "優先使用道具" 以免道具占用
  - 同上, 建議打開物資補充功能, 並使用 "替換" 並確保有足夠空間
@@ -11,7 +11,9 @@
  - 非常重要: 請務必進入地圖內設置"標記"在出口位置, 每層樓都要設置
 
 運作流程:
- - 腳本採用倒走方式運作, 先探寶箱 -> 使用標記至出口 (3F > 2F > 1F > 入口)
+ - 腳本採用倒走方式運作, 先探寶箱 -> 使用標記至出口:
+    1. (3F > 2F > 1F > 入口)
+    2. (5F > 4F > 回歸)
  - 最多進入地圖3次, 之後會回旅館休息, 次數可修改 BATTLE_MAX_COUNT
 """
 
@@ -64,7 +66,7 @@ TEXT_MAPPING = {
 ## FFXI地圖入口點設定
 DUNGEON_SELECT_TITLE = "北穿幽靈城"
 DUNGEON_SELECT_TITLE_REGION = (0.35, 0.65, 0.04, 0.16)
-DUNGEON_SELECT_TARGET = "第三區"
+DUNGEON_SELECT_TARGET = "第五區"
 DUNGEON_SELECT_LIST_REGION = (0.30, 0.75, 0.18, 0.75)
 DUNGEON_SELECT_RETURN_TEXT = "開啟世界地圖"
 DUNGEON_SELECT_RETURN_ONLY = False
@@ -95,7 +97,9 @@ FFXI_EVENT_MENU_WAIT = 5.0
 EYES = {
     "retry": Retry(),
     "text_with_auto": TextWithAuto(),
-    "chest_action": ChestAction(select_index=CHEST_SELECT_INDEX),
+    "chest_action": ChestAction(
+        select_index=CHEST_SELECT_INDEX, select_retry_cooltime=18
+    ),
     "chest_path": ChestPath(),
     "return": Return(need_ret_inn=False, max_battle_num=BATTLE_MAX_COUNT),
     "recovery": Recovery(),
@@ -213,7 +217,9 @@ def ffxi_town() -> bool:
 
     if _return.need_ret_inn:
         FFXI_TOWN_STATE["event_done"] = False
-        return False
+        town = EYES["town"]
+        if not town.check_inn():
+            return False
 
     if not FFXI_TOWN_STATE["event_done"]:
         _temp, _mask = load_template(FFXI_EVENT_TEMPLATE, grayscale=False)
@@ -271,7 +277,7 @@ def ffxi_event_menu() -> bool:
     return False
 
 
-def _find_ocr_text_center(screen, text, region, *, prefer="first"):
+def _find_ocr_text_center(screen, text, region, *, prefer="first", y_offset=0.0):
     x1, x2, y1, y2 = region
     h, w = screen.shape[:2]
     x1 = int(x1 * w)
@@ -294,7 +300,7 @@ def _find_ocr_text_center(screen, text, region, *, prefer="first"):
             if text in rec_text:
                 x1b, y1b, x2b, y2b = (int(v) for v in box)
                 cx = (x1b + x2b) // 2 + x1
-                cy = (y1b + y2b) // 2 + y1
+                cy = (y1b + y2b) // 2 + y1 + int(y_offset * h)
                 candidates.append((cy, cx, cy))
     if not candidates:
         return None
@@ -342,7 +348,6 @@ def ffxi_dungeon_select() -> bool:
             state.logger.info("選擇返回城鎮")
             click_at(_point)
             time.sleep(DUNGEON_SELECT_WAIT)
-            _return.need_ret_inn = False
             return True
         state.logger.warning("找不到開啟世界地圖按鈕")
         return True
@@ -382,7 +387,7 @@ def ffxi_world_map() -> bool:
 
     while WORLD_MAP_STATE["scrolls"] < WORLD_MAP_MAX_SCROLLS:
         _point = _find_ocr_text_center(
-            _screen, WORLD_MAP_TARGET, WORLD_MAP_TARGET_REGION
+            _screen, WORLD_MAP_TARGET, WORLD_MAP_TARGET_REGION, y_offset=-0.04
         )
         if _point:
             _point = calculate_click_point(_point, (0, 0))

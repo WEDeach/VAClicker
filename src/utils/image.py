@@ -35,6 +35,17 @@ def load_template(template_name: str, *, grayscale: bool):
     return image, mask
 
 
+def _finite_max_loc(result: np.ndarray):
+    """Return (max_val, max_loc) from the finite cells of a correlation
+    result, or (None, None) if no finite cell exists."""
+    finite_mask = np.isfinite(result)
+    if not np.any(finite_mask):
+        return None, None
+    sentinel = np.where(finite_mask, result, np.float32(-1.0))
+    _, max_val, _, max_loc = cv2.minMaxLoc(sentinel)
+    return max_val, max_loc
+
+
 def match_template(
     haystack: np.ndarray,
     template: np.ndarray,
@@ -70,20 +81,20 @@ def match_template(
         result = cv2.matchTemplate(
             haystack_proc, template, cv2.TM_CCOEFF_NORMED, mask=use_mask
         )
-        _, max_val, _, max_loc = cv2.minMaxLoc(result)
-        if not np.isfinite(max_val):
+        max_val, max_loc = _finite_max_loc(result)
+        if max_val is None:
             result = cv2.matchTemplate(
                 haystack_proc, template, cv2.TM_CCORR_NORMED, mask=use_mask
             )
-            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+            max_val, max_loc = _finite_max_loc(result)
+            if max_val is None:
+                return None
         if region is not None:
             max_loc = (max_loc[0] + x1, max_loc[1] + y1)
         if log_score:
             logger.info(f"模板比對結果: max_val={max_val:.4f} at {max_loc}")
-        if not np.isfinite(max_val):
-            max_val = 1.0
-            if grayscale:
-                return None
+        if ocr_check is not None and all(max_val < score for _, score in ocr_check):
+            return None
     else:
         if region is None:
             raise ValueError("region 參數必須與空模板一起使用")

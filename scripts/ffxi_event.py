@@ -28,6 +28,7 @@ from src.ai.btn.path.chest import ChestPath
 from src.ai.btn.recovery import Recovery
 from src.ai.btn.retry import Retry
 from src.ai.dialog.text_with_auto import TextWithAuto
+from src.ai.view.death import DeathView
 from src.ai.view.town import TownView
 from src.core import VACore
 from src.utils.clicker import (
@@ -54,13 +55,14 @@ WORLD_MAP_STATE = {"scrolls": 0}
 FFXI_TOWN_STATE = {"event_done": False}
 FFXI_IN_DUNGEON = False
 BATTLE_MAX_COUNT = 3  # 回旅館前的最大進入地圖次數
+ALLOW_REVIVE = True  # 是否允許自動復活(玩家)
 
 CHEST_OPEN_PATTERN = "打開\n\\w*?都不做"
 HEALTH_CHECK_TEXT = "意志力"
 HEAL_BUTTON_TEXT = "回復"
 
 TEXT_MAPPING = {
-    "chest.action.open": CHEST_OPEN_PATTERN,
+    "btn.chest.action.open": CHEST_OPEN_PATTERN,
 }
 
 ## FFXI地圖入口點設定
@@ -86,7 +88,7 @@ WORLD_MAP_SCROLL_BORDER_OFFSET = 5
 FFXI_TOWN_CONFIRM_REGION = (0.34, 0.39, 0.37, 0.43)
 FFXI_EVENT_TEMPLATE = "BTN_EVENT.png"
 FFXI_EVENT_SEARCH_REGION = (0.50, 0.70, 0.58, 1.00)
-FFXI_EVENT_BUTTON_THRESHOLD = 0.80
+FFXI_EVENT_BUTTON_THRESHOLD = 0.75
 FFXI_EVENT_MENU_TITLE = "深暗幻想之城"
 FFXI_EVENT_MENU_TARGET = "北穿幽靈城"
 FFXI_EVENT_MENU_TITLE_REGION = (0.30, 0.70, 0.05, 0.15)
@@ -95,6 +97,7 @@ FFXI_EVENT_MENU_WAIT = 5.0
 
 
 EYES = {
+    "death": DeathView(allow_revive=ALLOW_REVIVE),
     "retry": Retry(),
     "text_with_auto": TextWithAuto(),
     "chest_action": ChestAction(
@@ -119,10 +122,11 @@ def entrypoint(core: "VACore"):
 
     eyes = [
         EYES["retry"],
+        EYES["death"],
         ffxi_recovery,
         EYES["text_with_auto"],
         EYES["chest_action"],
-        EYES["return"],
+        ffxi_return,
         EYES["recovery"],
         EYES["auto_mode"],
         ffxi_town,
@@ -132,7 +136,9 @@ def entrypoint(core: "VACore"):
         ffxi_chest_path,
     ]
 
-    EYES["town"].core = core
+    genjitsu_jyanais = [EYES["return"], EYES["town"]]
+    for netsuijyou in genjitsu_jyanais:
+        core.register_ai(netsuijyou, genjitsu=False)
 
     for eye in eyes:
         core.register_ai(eye)
@@ -200,6 +206,8 @@ def ffxi_recovery() -> bool:
                 chest_action.last_unlock_time = 0
             else:
                 state.logger.warning("無法進入回復界面...")
+                move_cursor_to((left + width // 2, top + height // 2))
+                time.sleep(0.2)
                 click_by_gamepad(vgamepad.XUSB_BUTTON.XUSB_GAMEPAD_B)
                 time.sleep(3)
             return True
@@ -421,6 +429,16 @@ def ffxi_chest_path() -> bool:
         if not FFXI_IN_DUNGEON:
             FFXI_IN_DUNGEON = True
             state.logger.info("已設置進入地下城標記")
+        return True
+    return False
+
+
+def ffxi_return() -> bool:
+    global FFXI_IN_DUNGEON
+
+    if EYES["return"].check():
+        FFXI_IN_DUNGEON = False
+        state.logger.info("已設置離開地下城標記")
         return True
     return False
 

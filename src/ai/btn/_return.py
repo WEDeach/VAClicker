@@ -83,10 +83,17 @@ class Return(AI):
         for text, (bx1, by1, bx2, by2) in candidates:
             full_x1, full_y1 = x1 + bx1, y1 + by1
             full_x2, full_y2 = x1 + bx2, y1 + by2
-            tier = self._classify_tier(screen[full_y1:full_y2, full_x1:full_x2])
+            tier, color_info = self._classify_tier(
+                screen[full_y1:full_y2, full_x1:full_x2]
+            )
             if tier is None:
-                state.logger.debug("[Return] 無法辨識加護顏色，跳過候選: %s", text)
+                state.logger.debug(
+                    "[Return] 無法辨識加護顏色，跳過候選: %s (%s)", text, color_info
+                )
                 continue
+            state.logger.debug(
+                "[Return] 辨識加護顏色: %s -> tier=%d (%s)", text, tier, color_info
+            )
             ranked.append((tier, text, (full_x1, full_y1, full_x2, full_y2)))
 
         if not ranked:
@@ -95,6 +102,10 @@ class Return(AI):
 
         top_tier = max(tier for tier, _, _ in ranked)
         top_candidates = [c for c in ranked if c[0] == top_tier]
+        state.logger.debug(
+            "[Return] 所有加護候選: %s",
+            ", ".join(f"{text}(tier={tier})" for tier, text, _ in ranked),
+        )
         _, chosen_text, (cx1, cy1, cx2, cy2) = random.choice(top_candidates)
         state.logger.info(
             "[Return] 選擇加護: %s (tier=%d, 候選數=%d)",
@@ -110,7 +121,7 @@ class Return(AI):
 
     def _classify_tier(self, box_bgr: np.ndarray):
         if box_bgr.size == 0:
-            return None
+            return None, "total=0"
         hsv = cv2.cvtColor(box_bgr, cv2.COLOR_BGR2HSV)
         hue, sat, val = hsv[..., 0], hsv[..., 1], hsv[..., 2]
         total = hue.size
@@ -135,11 +146,33 @@ class Return(AI):
             BLESSING_WHITE_TIER: int(np.count_nonzero(white_mask)),
         }
         best_tier = max(counts, key=counts.get)
-        if counts[best_tier] / total < MIN_COLOR_PIXEL_RATIO:
-            return None
-        return best_tier
+        best_count = counts[best_tier]
+        best_name = {
+            BLESSING_WHITE_TIER: "白",
+            BLESSING_GREEN_TIER: "綠",
+            BLESSING_BLUE_TIER: "藍",
+        }[best_tier]
+        white = counts[BLESSING_WHITE_TIER]
+        green = counts[BLESSING_GREEN_TIER]
+        blue = counts[BLESSING_BLUE_TIER]
+        best_ratio = best_count / total
+        color_info = (
+            f"白={white}({white / total * 100:.1f}%) "
+            f"綠={green}({green / total * 100:.1f}%) "
+            f"藍={blue}({blue / total * 100:.1f}%) "
+            f"總={total} 最高={best_name}({best_ratio:.2%}) "
+            f"閾值={MIN_COLOR_PIXEL_RATIO:.2%}"
+        )
+        if best_ratio < MIN_COLOR_PIXEL_RATIO:
+            return None, color_info
+        return best_tier, color_info
 
     def increment_battle(self) -> None:
         self.current_battle_num += 1
         if self.current_battle_num >= self.max_battle_num:
             self.need_ret_inn = True
+        state.logger.debug(
+            "increment_battle called, current_battle_num=%d, need_ret_inn=%s",
+            self.current_battle_num,
+            self.need_ret_inn,
+        )

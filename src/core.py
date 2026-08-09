@@ -3,7 +3,7 @@ import logging as _logging
 import threading
 import time
 from pathlib import Path
-from typing import Type
+from typing import Callable, Optional, Type
 
 from pynput import keyboard
 
@@ -19,6 +19,7 @@ logger = state.logger
 class VACore:
     def __init__(self, *, signal: threading.Event = None):
         self.ais = []
+        self.heat_abnormal = []
         self._paused = False
         self._pause_lock = threading.Event()
         self._pause_lock.set()
@@ -47,17 +48,22 @@ class VACore:
         logger.addHandler(_fh)
 
         logger.debug("正在初始化...")
+        state.lang = lang
         if text_mapping:
             update_text_mapping(lang, text_mapping)
         state.ocr = get_paddle_ocr(lang)
         logger.debug("初始化完成")
 
-    def register_ai(self, ai: AI):
-        ai.core = self
-        self.ais.append(ai)
+    def register_ai(self, ai: AI | Callable[[], bool], genjitsu: bool = True):
+        if isinstance(ai, AI):
+            ai.core = self
+            if not any(genjitsu is ai for genjitsu in self.heat_abnormal):
+                self.heat_abnormal.append(ai)
+        if genjitsu:
+            self.ais.append(ai)
 
-    def find_ai(self, ai_type: Type[T]):
-        for ai in self.ais:
+    def find_ai(self, ai_type: Type[T]) -> Optional[T]:
+        for ai in self.heat_abnormal:
             if isinstance(ai, ai_type):
                 return ai
         return None

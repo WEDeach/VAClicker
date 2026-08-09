@@ -7,7 +7,7 @@ from ...utils.window import get_window_screen
 
 
 class TextWithAuto(AI):
-    def __init__(self, *, delay_pre_dialog: float = 5.0):
+    def __init__(self, *, delay_pre_dialog: float = 1.5):
         super().__init__()
         self.delay_pre_dialog = delay_pre_dialog
 

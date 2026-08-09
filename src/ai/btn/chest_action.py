@@ -8,6 +8,8 @@ from ...utils.shared import state
 from ...utils.text_map import get_text_mapping
 from ...utils.window import get_window_rect, get_window_screen
 
+OPENER_SEARCH_REGION = (0.30, 0.70, 0.50, 1.00)
+
 
 class ChestAction(AI):
     def __init__(
@@ -16,6 +18,8 @@ class ChestAction(AI):
         select_index: int = 0,
         select_retry_cooltime: float = 12.0,
         delay_chest_unlock: float = 4.0,
+        delay_select_opener: float = 1.5,
+        delay_chest_open: float = 0.5,
     ):
         super().__init__()
         self.select_index = select_index
@@ -24,6 +28,8 @@ class ChestAction(AI):
         self.last_open_time = 0
         self.last_unlock_time = 0
         self.delay_chest_unlock = delay_chest_unlock
+        self.delay_select_opener = delay_select_opener
+        self.delay_chest_open = delay_chest_open
 
     def reset_select_index(self):
         self._select_index = self.select_index
@@ -43,6 +49,7 @@ class ChestAction(AI):
             ocr_check=[(re.compile(get_text_mapping("btn.chest.action.open")), 0)],
             region=(0.35, 0.65, 0.75, 0.88),
         )
+        _checked = False
         if _match:
             _loc, _ = _match
             left, top, width, height = get_window_rect()
@@ -50,8 +57,10 @@ class ChestAction(AI):
             _y = int(top + height * 0.81)
             _point = (_x, _y)
             click_at(_point)
-            return True
-        return self.select_opener()
+            time.sleep(self.delay_chest_open)
+            _checked = True
+            state.logger.info("已點擊開啟寶箱")
+        return self.select_opener() or _checked
 
     def select_opener(self) -> bool:
         _screen = get_window_screen()
@@ -63,7 +72,9 @@ class ChestAction(AI):
             True,
             _mask,
             ocr_check=[("要讓誰開啟", 0.8)],
+            region=OPENER_SEARCH_REGION,
         )
+        _checked = False
         if _match:
             loc, score = _match
             if score == 1.0:
@@ -126,9 +137,10 @@ class ChestAction(AI):
                 bx, by, bw, bh = rects[idx]
                 click_pt = (bx + bw // 2, by + bh // 2)
                 click_at(click_pt)
+                time.sleep(self.delay_select_opener)
                 state.logger.info("開啟寶箱 (By #%d)", idx)
-            return True
-        return self.chest_unlock()
+                _checked = True
+        return self.chest_unlock() or _checked
 
     def chest_unlock(self) -> bool:
         _screen = get_window_screen()

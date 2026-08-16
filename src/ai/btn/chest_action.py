@@ -18,7 +18,7 @@ class ChestAction(AI):
         select_index: int = 0,
         select_retry_cooltime: float = 12.0,
         delay_chest_unlock: float = 4.0,
-        delay_select_opener: float = 1.5,
+        delay_select_opener: float = 2.5,
         delay_chest_open: float = 0.5,
     ):
         super().__init__()

@@ -1,8 +1,14 @@
+import gc
 import importlib
 import logging
 import os
 import sys
+import time
 import warnings
+
+import psutil
+
+from .utils.shared import state
 
 warnings.filterwarnings("ignore", category=UserWarning, module="paddle")
 warnings.filterwarnings("ignore", category=UserWarning, module="requests")
@@ -46,6 +52,86 @@ def get_paddle_ocr(lang="chinese_cht"):
         os.close(_fd_out)
         os.close(_fd_err)
     return instance
+
+
+def _default_memory_limit_mb() -> int:
+    raw = os.environ.get("VACLICKER_OCR_MEM_LIMIT_MB")
+    if raw:
+        try:
+            return max(512, int(raw))
+        except ValueError:
+            pass
+    return 2048
+
+
+MEMORY_RESET_MIN_INTERVAL = 30.0
+
+
+class OCRManager:
+    """OCR wrapper that caps the process RSS.
+
+    Paddle's CPU inference pool caches one memory block per tensor shape
+    (each crop size / text-line batch width seen so far) and never returns
+    them to the OS, so RSS climbs with every new shape and stays high even
+    when idle. Rebuilding the pipeline releases the pool; ``check_memory``
+    does that when RSS exceeds the limit.
+    """
+
+    def __init__(self, lang="chinese_cht", memory_limit_mb=None):
+        self.lang = lang
+        self.memory_limit_mb = (
+            memory_limit_mb
+            if memory_limit_mb is not None
+            else _default_memory_limit_mb()
+        )
+        self._ocr = None
+        self._last_reset = 0.0
+        self.reset_count = 0
+        self._init()
+
+    def _init(self):
+        self._ocr = get_paddle_ocr(self.lang)
+
+    def predict(self, image, **kwargs):
+        if self._ocr is None:
+            self._init()
+        self.check_memory()
+        try:
+            return self._ocr.predict(image, **kwargs)
+        except Exception:
+            self.reset()
+            self._init()
+            return self._ocr.predict(image, **kwargs)
+
+    def check_memory(self):
+        if self._last_reset and (
+            time.monotonic() - self._last_reset < MEMORY_RESET_MIN_INTERVAL
+        ):
+            return
+        rss = psutil.Process().memory_info().rss / 1024 / 1024
+        if rss <= self.memory_limit_mb:
+            return
+        state.logger.warning(
+            "RSS %.0fMB 超過上限 %dMB，重建 OCR 釋放記憶體...",
+            rss,
+            self.memory_limit_mb,
+        )
+        self.reset()
+        self._init()
+        self.reset_count += 1
+        self._last_reset = time.monotonic()
+
+    def reset(self):
+        if self._ocr is not None:
+            try:
+                self._ocr.close()
+            except Exception:
+                pass
+            self._ocr = None
+        gc.collect()
+
+    def close(self):
+        self.reset()
 
 
 def _to_int(value) -> int:

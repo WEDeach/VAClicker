@@ -15,7 +15,7 @@ from ..btn._return import Return
 INN_DIALOG_BODY_REGION = (0.25, 0.75, 0.70, 0.90)
 # 底部 AUTO / 自動選擇控制項所在區域
 INN_DIALOG_CONTROL_REGION = (0.25, 0.75, 0.90, 1.00)
-INN_DIALOG_MAX_STEPS = 8
+INN_DIALOG_MAX_STEPS = 24
 INN_DIALOG_ABSENT_CONFIRMATIONS = 2
 # 相對於視窗截圖的安全備援座標，保證落在控制項區域之外
 INN_DIALOG_SAFE_FALLBACK_POINT = (0.50, 0.82)
@@ -104,6 +104,9 @@ class TownView(AI):
         )
         if _match:
             _return = self.find(Return)
+            if _return is None:
+                state.logger.warning("找不到 Return AI，無法處理旅館")
+                return False
             if _return.need_ret_inn:
                 loc, score = _match
                 point = calculate_click_point(loc, (0, 0))

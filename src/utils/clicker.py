@@ -1,4 +1,5 @@
 import ctypes
+import sys
 import time
 from typing import Optional, Tuple
 
@@ -140,6 +141,92 @@ def click_at(
             )
             return click_at(point, hwnd, retry - 1)
         raise RuntimeError("無法移動游標到指定位置，請確認程式有足夠權限")
+
+
+def drag_hold(
+    start: Tuple[int, int],
+    end: Tuple[int, int],
+    *,
+    hold_duration: float = 0.5,
+    move_duration: float = 0.0,
+    release_pause_duration: float = 0.0,
+    retry: int = 3,
+) -> None:
+    """Drag between absolute points while holding the left mouse button.
+
+    Set ``move_duration`` to interpolate smooth movement and
+    ``release_pause_duration`` to pause at the endpoint before releasing; for
+    example, ``drag_hold((960, 760), (960, 300), move_duration=0.5,
+    release_pause_duration=0.2)``. Raises ``RuntimeError`` after the same
+    bounded retry behavior as ``click_at``.
+    """
+    start_x, start_y = start
+    end_x, end_y = end
+    move_flags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+    press_flags = MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+    release_flags = MOUSEEVENTF_LEFTUP | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+    pressed = False
+
+    def _best_effort_release() -> bool:
+        nonlocal pressed
+        if not pressed:
+            return True
+        for _ in range(3):
+            if _send_input_mouse(release_flags, end_x, end_y):
+                pressed = False
+                return True
+        return False
+
+    try:
+        if not _send_input_mouse(move_flags, start_x, start_y):
+            raise RuntimeError("無法傳送滑鼠拖曳輸入")
+        if not _send_input_mouse(press_flags, start_x, start_y):
+            raise RuntimeError("無法傳送滑鼠拖曳輸入")
+        pressed = True
+        time.sleep(max(hold_duration, 0.0))
+        duration = max(move_duration, 0.0)
+        if duration:
+            step_interval = 0.03
+            step_count = max(1, round(duration / step_interval))
+            for step in range(1, step_count + 1):
+                progress = step / step_count
+                x = round(start_x + (end_x - start_x) * progress)
+                y = round(start_y + (end_y - start_y) * progress)
+                if not _send_input_mouse(move_flags, x, y):
+                    raise RuntimeError("無法傳送滑鼠拖曳輸入")
+                if step < step_count:
+                    time.sleep(duration / step_count)
+        elif not _send_input_mouse(move_flags, end_x, end_y):
+            raise RuntimeError("無法傳送滑鼠拖曳輸入")
+        time.sleep(max(release_pause_duration, 0.0))
+    except RuntimeError:
+        if retry > 0:
+            if _best_effort_release():
+                pressed = False
+            time.sleep(5)
+            logger.warning(
+                "無法執行滑鼠拖曳，%d 次重試剩餘%d次", 3 - retry + 1, retry - 1
+            )
+            drag_hold(
+                start,
+                end,
+                hold_duration=hold_duration,
+                move_duration=move_duration,
+                release_pause_duration=release_pause_duration,
+                retry=retry - 1,
+            )
+            return
+        if not _best_effort_release() and sys.exc_info()[0] is None:
+            raise RuntimeError("無法釋放滑鼠左鍵")
+        raise RuntimeError("無法執行滑鼠拖曳，請確認程式有足夠權限")
+    except Exception:
+        _best_effort_release()
+        raise
+    finally:
+        if pressed:
+            if not _best_effort_release() and sys.exc_info()[0] is None:
+                raise RuntimeError("無法釋放滑鼠左鍵")
+            pressed = False
 
 
 def _ensure_gamepad():

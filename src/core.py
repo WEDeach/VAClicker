@@ -8,7 +8,7 @@ from typing import Callable, Optional, Type
 from pynput import keyboard
 
 from . import AI, T
-from .ocr import get_paddle_ocr
+from .ocr import OCRManager
 from .utils.shared import state
 from .utils.text_map import update_text_mapping
 from .utils.window import get_foreground_window, get_window_handle
@@ -51,7 +51,7 @@ class VACore:
         state.lang = lang
         if text_mapping:
             update_text_mapping(lang, text_mapping)
-        state.ocr = get_paddle_ocr(lang)
+        state.ocr = OCRManager(lang)
         logger.debug("初始化完成")
 
     def register_ai(self, ai: AI | Callable[[], bool], genjitsu: bool = True):
@@ -91,6 +91,8 @@ class VACore:
         listener.start()
         while True:
             try:
+                if state.ocr is not None:
+                    state.ocr.check_memory()
                 if not self._pause_lock.wait(timeout=0.5):
                     continue
                 if self.check_window():

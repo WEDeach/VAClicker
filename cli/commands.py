@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import inspect
 import sys
 import threading
 from pathlib import Path
@@ -42,6 +43,35 @@ async def load_scripts() -> None:
     print(f"已載入 {len(_scripts)} 個腳本")
 
 
+def _invoke_script(entry: Callable, core: VACore, args: list[str]) -> None:
+    """Pass CLI arguments only to entrypoints that accept a second positional
+    argument.
+    """
+    parameters = tuple(inspect.signature(entry).parameters.values())
+    accepts_args = (
+        any(
+            parameter.kind is inspect.Parameter.VAR_POSITIONAL
+            for parameter in parameters
+        )
+        or len(
+            [
+                parameter
+                for parameter in parameters
+                if parameter.kind
+                in (
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                )
+            ]
+        )
+        >= 2
+    )
+    if accepts_args:
+        entry(core, args)
+    else:
+        entry(core)
+
+
 async def dispatch(loop: asyncio.AbstractEventLoop, line: str) -> None:
     parts = line.strip().split()
     if not parts:
@@ -53,7 +83,7 @@ async def dispatch(loop: asyncio.AbstractEventLoop, line: str) -> None:
     else:
         if name in _scripts:
             _stop_event.clear()
-            _scripts[name](_core)
+            _invoke_script(_scripts[name], _core, args)
             exit()
         else:
             print(f"未知指令: {name}")

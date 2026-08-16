@@ -27,6 +27,7 @@ from src.ai.btn.chest_action import ChestAction
 from src.ai.btn.path.chest import ChestPath
 from src.ai.btn.recovery import Recovery
 from src.ai.btn.retry import Retry
+from src.ai.dialog.low_willpower import LowWillpowerDialog
 from src.ai.dialog.text_with_auto import TextWithAuto
 from src.ai.view.death import DeathView
 from src.ai.view.town import TownView
@@ -54,8 +55,9 @@ CHEST_SELECT_INDEX = 2  # 開寶箱角色順位 從0開始
 WORLD_MAP_STATE = {"scrolls": 0}
 FFXI_TOWN_STATE = {"event_done": False}
 FFXI_IN_DUNGEON = False
-BATTLE_MAX_COUNT = 3  # 回旅館前的最大進入地圖次數
+BATTLE_MAX_COUNT = 1  # 回旅館前的最大進入地圖次數
 ALLOW_REVIVE = True  # 是否允許自動復活(玩家)
+CHARACTER_REVIVE_DRY_RUN = False
 
 CHEST_OPEN_PATTERN = "打開\n\\w*?都不做"
 HEALTH_CHECK_TEXT = "意志力"
@@ -97,8 +99,12 @@ FFXI_EVENT_MENU_WAIT = 5.0
 
 
 EYES = {
-    "death": DeathView(allow_revive=ALLOW_REVIVE),
+    "death": DeathView(
+        allow_revive=ALLOW_REVIVE,
+        character_revive_dry_run=CHARACTER_REVIVE_DRY_RUN,
+    ),
     "retry": Retry(),
+    "low_willpower": LowWillpowerDialog(),
     "text_with_auto": TextWithAuto(),
     "chest_action": ChestAction(
         select_index=CHEST_SELECT_INDEX, select_retry_cooltime=18
@@ -124,6 +130,7 @@ def entrypoint(core: "VACore"):
         EYES["retry"],
         EYES["death"],
         ffxi_recovery,
+        EYES["low_willpower"],
         EYES["text_with_auto"],
         EYES["chest_action"],
         ffxi_return,

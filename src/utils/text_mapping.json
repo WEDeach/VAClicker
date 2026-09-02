@@ -2,6 +2,7 @@
   "chinese_cht": {
     "btn.chest.action.open": "打開\n\\w*?都不做",
     "btn.retry": "重試",
+    "btn.server_error.return_title": "返回標題畫面",
     "view.death.player.revive": "再起",
     "view.death.player.accept": "接受死亡"
   }

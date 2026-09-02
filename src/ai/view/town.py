@@ -198,10 +198,24 @@ class TownView(AI):
             _return.current_battle_num = 1
             _return.need_ret_inn = False
             state.logger.info("已回旅館休息，重置戰鬥次數")
+        self._request_backpack_organize()
         self._inn_dialog_pending = False
         click_by_gamepad(vgamepad.XUSB_BUTTON.XUSB_GAMEPAD_B)  # 返回
         time.sleep(self.delay_inn_exit)
         return True
+
+    def _request_backpack_organize(self) -> None:
+        """旅店休息完成後，請求整理背包(若已註冊 InventoryOrganizer)。"""
+        try:
+            from ..inventory import InventoryOrganizer
+        except ImportError:
+            return
+        organizer = self.find(InventoryOrganizer)
+        if organizer is not None:
+            organizer.need_organize = True
+            state.logger.info("已請求整理背包")
+        else:
+            state.logger.debug("未註冊 InventoryOrganizer，跳過背包整理")
 
     def _settle_inn_dialog(self) -> bool:
         for _ in range(self.inn_dialog_max_steps):

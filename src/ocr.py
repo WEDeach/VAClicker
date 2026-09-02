@@ -61,7 +61,7 @@ def _default_memory_limit_mb() -> int:
             return max(512, int(raw))
         except ValueError:
             pass
-    return 2048
+    return 4096
 
 
 MEMORY_RESET_MIN_INTERVAL = 30.0

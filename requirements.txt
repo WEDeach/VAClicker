@@ -3,4 +3,6 @@ numpy
 pywin32
 vgamepad
 pynput
-paddleocr
+paddleocr==3.7.0
+# paddleocr 3.7+ 的 OCR pipeline 需要 paddlex[ocr] extra (僅 ocr-core 會缺依賴)
+paddlex[ocr]==3.7.2

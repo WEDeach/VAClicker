@@ -9,7 +9,7 @@ from ...ocr import parse_ocr_boxes
 from ...utils.clicker import calculate_click_point, click_at
 from ...utils.shared import state
 from ...utils.text_map import get_text_mapping
-from ...utils.window import dump4log, get_window_rect, get_window_screen
+from ...utils.window import get_window_rect, get_window_screen
 
 PLAYER_DEATH_REGION = (0.30, 0.70, 0.40, 0.65)
 REVIVE_CHARGE_REGION = (0.35, 0.65, 0.00, 0.15)
@@ -18,9 +18,9 @@ REVIVE_CHARGE_HSV_UPPER = (45, 255, 255)
 REVIVE_CHARGE_MIN_WIDTH = 0.02
 REVIVE_CHARGE_MAX_WIDTH = 0.04
 REVIVE_CHARGE_MIN_HEIGHT = 0.03
-REVIVE_CHARGE_MAX_HEIGHT = 0.07
+REVIVE_CHARGE_MAX_HEIGHT = 0.09
 REVIVE_CHARGE_MIN_AREA = 0.0004
-REVIVE_CHARGE_MAX_AREA = 0.0012
+REVIVE_CHARGE_MAX_AREA = 0.0022
 REVIVE_CHARGE_PRESENT_MIN_PIXELS = 50
 PLAYER_DEATH_TEXT_KEYS = (
     "view.death.player.revive",
@@ -32,6 +32,12 @@ CHARACTER_REVIVE_SESSION_OVERLAY = "overlay"
 CHARACTER_REVIVE_SESSION_NORMAL = "normal"
 CHARACTER_EXIT_REGION = (0.90, 1.00, 0.82, 1.00)
 CHARACTER_RING_REGION = (0.30, 0.70, 0.20, 0.80)
+# 環中心空心驗證: 中心小區域的藍色像素必須極少(環形而非實心填充)。
+# 死亡畫面的手部/UI 元素可能位於中心, 因此同時允許「中心藍色相對環區很少」
+# 的比值條件, 以容忍小型中心元素同時排除整片藍天的城鎮畫面。
+CHARACTER_RING_CENTER_REGION = (0.46, 0.54, 0.45, 0.55)
+CHARACTER_RING_CENTER_MAX_PIXELS = 50
+CHARACTER_RING_CENTER_MAX_RATIO = 0.35
 CHARACTER_TARGET_REGION = (0.40, 0.60, 0.30, 0.70)
 CHARACTER_DEATH_OVERLAY_REGION = (0.20, 0.80, 0.20, 0.80)
 CHARACTER_DEATH_OVERLAY_RED_MARGIN = 15
@@ -40,6 +46,16 @@ CHARACTER_EXIT_HSV_LOWER = (0, 0, 180)
 CHARACTER_EXIT_HSV_UPPER = (180, 70, 255)
 CHARACTER_EXIT_FALLBACK_HSV_LOWER = (0, 0, 100)
 CHARACTER_EXIT_FALLBACK_HSV_UPPER = (180, 180, 255)
+# 紅色 overlay 死亡畫面的退出按鈕會被染紅(飽和度升高、亮度降低),
+# 白框偵測失效; 改用「低飽和亮色 + 近正方形」的按鈕形狀偵測。
+# 正方形條件排除城鎮按鍵提示(扁長)與其他誤判。
+# 組件必須「有色彩」(mean sat >= 下限): 排除灰色按鈕(如寶箱介面的
+# 暗灰方形按鈕 sat~4, 會被誤判為退出按鈕而誤進復活追蹤)。
+CHARACTER_EXIT_REDOVERLAY_HSV_LOWER = (0, 0, 100)
+CHARACTER_EXIT_REDOVERLAY_HSV_UPPER = (180, 100, 255)
+CHARACTER_EXIT_REDOVERLAY_MIN_ASPECT = 0.7
+CHARACTER_EXIT_REDOVERLAY_MAX_ASPECT = 1.4
+CHARACTER_EXIT_REDOVERLAY_MIN_SATURATION = 25.0
 CHARACTER_RING_HSV_LOWER = (90, 80, 80)
 CHARACTER_RING_HSV_UPPER = (130, 255, 255)
 CHARACTER_RING_FALLBACK_MAX_SATURATION = 140
@@ -48,6 +64,15 @@ CHARACTER_RING_FALLBACK_MIN_RADIUS = 0.08
 CHARACTER_RING_FALLBACK_MAX_RADIUS = 0.30
 CHARACTER_RING_FALLBACK_MIN_ANGULAR_COVERAGE = 0.20
 CHARACTER_RING_FALLBACK_SAMPLE_COUNT = 180
+# 紅色 overlay 死亡畫面的環偵測: 圓環被染紅, 用紅色圓周覆蓋偵測。
+# 覆蓋閾值 0.35: 0826 死亡畫面紅色覆蓋 0.32-1.00(極少數極弱 overlay 幀
+# 略低於閾值, 輪詢會在下個檢查恢復); 暫停/其他畫面的紅色弧形最高 ~0.37,
+# 但那些畫面無退出按鈕, 不會被 character_death_state 判定為死亡。
+CHARACTER_RING_RED_HUE_MAX = 15
+CHARACTER_RING_RED_HUE_MIN = 165
+CHARACTER_RING_RED_MIN_SATURATION = 40
+CHARACTER_RING_RED_MIN_VALUE = 80
+CHARACTER_RING_RED_MIN_ANGULAR_COVERAGE = 0.35
 CHARACTER_TARGET_HSV_LOWER = (5, 50, 140)
 CHARACTER_TARGET_HSV_UPPER = (45, 255, 255)
 CHARACTER_WEAK_TARGET_HSV_LOWER = (0, 15, 55)
@@ -64,13 +89,18 @@ CHARACTER_EXIT_MAX_WIDTH = 0.05
 CHARACTER_EXIT_MIN_HEIGHT = 0.03
 CHARACTER_EXIT_MAX_HEIGHT = 0.07
 CHARACTER_RING_MIN_PIXELS = 500
-CHARACTER_DEATH_NO_OVERLAY_MAX_TARGET_PIXELS = 500
+# 無紅色 overlay 的死亡等待畫面: 中心黃色像素上限。
+# 0820 死亡畫面 137-241px; 091517 死亡畫面變體 1754px(黃色 UI 裝飾較多);
+# 復活圓環畫面的黃色 disk + 外圈裝飾為 15697px 以上, 不會誤判為死亡等待。
+CHARACTER_DEATH_NO_OVERLAY_MAX_TARGET_PIXELS = 5000
 CHARACTER_TARGET_MIN_PIXELS = 1000
+# 復活圓環進行中(REVIVING)的黃色目標像素強門檻: 復活畫面的黃色 disk +
+# 外圈裝飾達 15000px 以上; 死亡等待畫面即使有黃色 UI 裝飾(091517 為
+# 1754px)也遠低於此。disk 形狀偵測是主要區分(0823 復活 450/450 幀
+# disk 都存在), 此門檻是 disk 偶爾偵測失敗時的雙保險。
+CHARACTER_REVIVING_STRONG_TARGET_PIXELS = 10000
 CHARACTER_REVIVE_TARGET_RADIUS = 0.06
 CHARACTER_REVIVE_TARGET_TOLERANCE = 0.015
-CHARACTER_REVIVE_MIN_RADIUS = (
-    CHARACTER_REVIVE_TARGET_RADIUS + CHARACTER_REVIVE_TARGET_TOLERANCE
-)
 CHARACTER_REVIVE_MAX_RADIUS = 0.34
 CHARACTER_TARGET_MIN_RADIUS = 4.0
 CHARACTER_TARGET_MAX_RADIUS = 0.12
@@ -96,21 +126,42 @@ CHARACTER_TARGET_TOLERANCE_RATIO = 0.25
 CHARACTER_TARGET_MIN_TOLERANCE = 3.0
 CHARACTER_REVIVE_CLICK_RADIUS_MARGIN = 3.0
 CHARACTER_REVIVE_RING_MIN_RADIUS = 6.0
+# 復活圓環場景(fallback)的環測量下限餘裕: 死亡等待畫面的環測量常落在
+# 中心偽影(r6 = 測量下限), 測到 r6+餘裕 以內一律視為非復活圓環。
+CHARACTER_REVIVE_SCENE_MIN_RING_MARGIN = 14.0
 CHARACTER_REVIVE_SCORE_THRESHOLD = 0.35
 CHARACTER_REVIVE_FALLBACK_MAX_SATURATION = 140
 CHARACTER_REVIVE_FALLBACK_MIN_VALUE = 100
 CHARACTER_REVIVE_FALLBACK_SCORE_THRESHOLD = 0.35
-CHARACTER_REVIVE_HISTORY_SIZE = 4
+CHARACTER_REVIVE_HISTORY_SIZE = 12
 CHARACTER_REVIVE_MIN_MEASURED_FRAMES = 3
 CHARACTER_REVIVE_MIN_MEASURED_CONFIDENCE = 0.5
 CHARACTER_REVIVE_LOG_INTERVAL = 0.1
 CHARACTER_REVIVE_DETECTION_GRACE = 0.15
 CHARACTER_REVIVE_MAX_PREDICTION_GAP = 0.5
-CHARACTER_REVIVE_MAX_SHRINK_SPEED = 2200.0
+CHARACTER_REVIVE_MAX_SHRINK_SPEED = 6000.0
 CHARACTER_REVIVE_MIN_SHRINK_SPEED = 25.0
-CHARACTER_REVIVE_OUTER_RESET_RATIO = 0.85
-CHARACTER_REVIVE_BOUNDARY_BAND_GROWTH_LIMIT = 0.08
-CHARACTER_REVIVE_BOUNDARY_RESET_FRAMES = 3
+# 圓環到達本輪最小半徑的容差
+CHARACTER_REVIVE_MIN_RADIUS_TOLERANCE = 6.0
+# 週期最小半徑需連續停留的幀數 (避免收縮途中短暫停留的誤判)
+CHARACTER_REVIVE_CYCLE_MIN_STABLE_FRAMES = 2
+# 週期最小半徑的停留判定容差 (嚴格 2px: 收縮中繼半徑相差 5px 不算停留)
+CHARACTER_REVIVE_CYCLE_MIN_STABLE_TOLERANCE = 2.0
+# 絕對最小半徑: 環收縮且本週期見過明顯外圈時, 依「到達中心的剩餘時間
+# (eta)」點擊, 用於環在最小處幾乎不停留的極端畫面。
+# 系統延遲(點擊送出→遊戲生效)約 50-60ms: 點擊在 eta 落於下方範圍時送出,
+# 讓點擊生效時環正好到達中心。太晚(eta 過小)會讓環已擴張 → 失敗扣血。
+CHARACTER_REVIVE_ABSOLUTE_MIN_ETA_MIN = 0.045
+CHARACTER_REVIVE_ABSOLUTE_MIN_ETA_MAX = 0.065
+# 絕對最小判定所需的外圈半徑門檻 (排除靜態 r80 盤緣/死亡等待靜態環)
+CHARACTER_REVIVE_ABSOLUTE_MIN_OUTER_RADIUS = 150.0
+# 昏暗黃色目標圓盤的 HSV 偵測範圍(影片畫面較暗, 放寬亮度)
+CHARACTER_TARGET_DISK_HSV_LOWER = (5, 30, 80)
+CHARACTER_TARGET_DISK_HSV_UPPER = (45, 255, 255)
+CHARACTER_TARGET_DISK_MAX_RADIUS = 0.22
+CHARACTER_TARGET_DISK_MIN_RADIUS = 20.0
+CHARACTER_TARGET_DISK_MIN_AREA = 800
+CHARACTER_TARGET_DISK_CENTER_SEARCH = 0.30
 CHARACTER_REVIVE_CLICK_COOLDOWN = 1.0
 CHARACTER_REVIVE_RETRY_DELAY = 0.75
 CHARACTER_REVIVE_POST_CLICK_GRACE = 3.0
@@ -118,6 +169,35 @@ CHARACTER_REVIVE_TIMEOUT_COOLDOWN = 2.0
 CHARACTER_REVIVE_SESSION_DEADLINE = 30.0
 CHARACTER_REVIVE_SAMPLE_COUNT = 360
 CHARACTER_DEATH_POLL_INTERVAL = 0.25
+# 預測點擊: 收縮期內以最近幾幀擬合速度, 預測 ring 到達最小半徑的時刻
+CHARACTER_REVIVE_PREDICT_FRAMES = 6
+# 點擊窗口: eta(預測剩餘秒數) 落於 [下界, 上界] 才觸發。
+# 上界 = 點擊送出→遊戲生效延遲(~55ms) + 少量餘裕: 超過則生效時環未到中心, 太早。
+# 下界: eta 低於此值表示這輪已太晚(生效時環已過中心開始擴張) → 不點,
+# 跳過本輪等下一輪收縮(週期僅 ~0.3s, 很快有下一次機會)。
+CHARACTER_REVIVE_PREDICT_LEAD = 0.075
+CHARACTER_REVIVE_PREDICT_LEAD_MIN = 0.045
+CHARACTER_REVIVE_PREDICT_MIN_SAMPLES = 3
+# 預測模型的有效觀察窗口: 15 秒 / 至多兩個收縮週期
+CHARACTER_REVIVE_MODEL_WINDOW = 15.0
+# 預測前 ring 必須從本週期外圈實質收縮的比例 (排除最小半徑附近的抖動)
+CHARACTER_REVIVE_PREDICT_MIN_CONTRACTION = 0.30
+# 預測擬合速度必須快於此值 (px/s), 排除停留/抖動的假收縮
+CHARACTER_REVIVE_PREDICT_MIN_SPEED = 200.0
+# 靜態白環(中央盤緣/UI 圓圈)偵測: 存在時 ring 測量改搜尋其外側的大環
+CHARACTER_REVIVE_STATIC_RING_MIN_RADIUS = 60
+CHARACTER_REVIVE_STATIC_RING_MAX_RADIUS = 120
+CHARACTER_REVIVE_STATIC_RING_MIN_SCORE = 0.8
+CHARACTER_REVIVE_STATIC_RING_EXCLUDE_MIN = 120
+CHARACTER_REVIVE_STATIC_RING_CONFIRM_FRAMES = 8
+# 圓環收縮後停止偵測: 連續 N 幀半徑變化小於容差即視為已到達中心。
+# N 需夠大以排除收縮中途的短暫停頓(遊戲 ring 在真正中心會停較久)。
+CHARACTER_REVIVE_SETTLE_FRAMES = 8
+CHARACTER_REVIVE_SETTLE_TOLERANCE = 4.0
+# 觀測階段的密集採樣預算(秒): 允許單次 check 內連續取幀直到點擊/達標
+CHARACTER_REVIVE_OBSERVE_BUDGET = 10.0
+# 觀測間隔: 收縮週期僅 ~0.3s, 觀測必須夠密才能抓準點擊窗口
+CHARACTER_REVIVE_OBSERVE_STEP = 0.005
 
 
 class DeathView(AI):
@@ -135,6 +215,8 @@ class DeathView(AI):
         character_revive_dry_run: bool = True,
         character_revive_session_deadline: float = CHARACTER_REVIVE_SESSION_DEADLINE,
         character_death_poll_interval: float = CHARACTER_DEATH_POLL_INTERVAL,
+        wait_if_last_revive_charge: bool = True,
+        revive_charge_wait_seconds: float = 1 * 3600 + 59 * 60,
     ):
         super().__init__()
         self.allow_revive = allow_revive
@@ -148,6 +230,15 @@ class DeathView(AI):
         self.character_revive_dry_run = character_revive_dry_run
         self.character_revive_session_deadline = character_revive_session_deadline
         self.character_death_poll_interval = character_death_poll_interval
+        # 復活之火只剩最後一個時, 先等待恢復週期(每 2 小時恢復一個、
+        # 非即時)再點擊復活, 避免用掉最後一個後無火可用。
+        self.wait_if_last_revive_charge = wait_if_last_revive_charge
+        self.revive_charge_wait_seconds = revive_charge_wait_seconds
+        self._revive_charge_wait_until = None
+        self._revive_charge_wait_last_shown = None
+        # 本提示 episode 是否已等待過(截止後鎖存, 提示消失時清除)
+        self._revive_charge_wait_done = False
+        self._revive_charge_wait_missing_frames = 0
         self._last_character_death_state = None
         self._character_revive_history = deque(maxlen=CHARACTER_REVIVE_HISTORY_SIZE)
         self._character_revive_target_history = deque(
@@ -163,15 +254,51 @@ class DeathView(AI):
         self._character_revive_last_click = None
         self._character_revive_deadline_logged = False
         self._character_revive_session_expired = False
-        self._last_character_revive_log = 0.0
-        self._character_revive_band_rejections = 0
-        self._character_revive_cycle_reached_target = False
+        self._character_revive_cycle_shrinking = False
+        self._character_revive_session_min_radius = None
+        self._character_revive_min_dwell = 0
+        self._character_revive_last_radius = None
+        self._character_revive_stable_radius_frames = 0
+        self._character_revive_shrink_history = []
+        self._character_revive_cycle_started_at = None
+        self._character_revive_cycle_max_radius = None
+        self._character_revive_cycle_min_radius = None
+        self._character_revive_static_ring_radius = None
+        self._character_revive_static_ring_pending = None
+        self._character_revive_static_ring_frames = 0
+        self._character_revive_cycle_count = 0
+        self._character_revive_model_ready = False
+        # 本輪已錯過預測點擊窗口(eta < 下界): 抑制同輪的 ring_at_min/
+        # ring_settled 補點(太晚送出), 等下一輪收縮再點。
+        self._character_revive_cycle_missed_predict = False
+        self._character_revive_model_epoch = None
+        self._character_revive_model_expired = False
         self._character_revive_retry_at = None
         self._character_revive_post_click_until = None
         self._character_revive_timeout_until = None
 
     def check(self) -> bool:
         now = time.monotonic()
+        # 復活之火等待/鎖存期間, 玩家復活提示必須仍在畫面上; 消失即
+        # 結束 episode(清除等待狀態)。放在所有提前 return(含冷卻分支)
+        # 之前, 確保畫面轉換(角色死亡路徑/冷卻)期間也能偵測提示消失。
+        # 連續 2 次確認, 避免單次 OCR 失敗誤清等待(誤清會導致重新開始
+        # 兩小時等待)。
+        if self._revive_charge_wait_until is not None or self._revive_charge_wait_done:
+            try:
+                screen_now = get_window_screen()
+                present = self._find_player_death_revive_box(screen_now) is not None
+            except Exception:
+                # 截圖/OCR 失敗: 不當作確認 miss(避免誤取消兩小時等待),
+                # 也不讓例外中斷 check。
+                present = True
+            if not present:
+                self._revive_charge_wait_missing_frames += 1
+                if self._revive_charge_wait_missing_frames >= 2:
+                    self._clear_revive_charge_wait()
+                    state.logger.info("玩家復活提示已消失，取消復活之火等待")
+            else:
+                self._revive_charge_wait_missing_frames = 0
         if self._character_revive_retry_at is not None:
             if now < self._character_revive_retry_at:
                 self._poll_character_death_screen()
@@ -186,7 +313,11 @@ class DeathView(AI):
                 self._poll_character_death_screen()
                 return True
             self._character_revive_post_click_until = None
-        screen = get_window_screen()
+        try:
+            screen = get_window_screen()
+        except Exception:
+            state.logger.warning("取得畫面失敗")
+            return False
         character_state = self.character_death_state(screen)
         exit_box = self._character_exit_box(screen)
         session_present = self._character_revive_activated and (
@@ -209,9 +340,7 @@ class DeathView(AI):
                         CHARACTER_REVIVE_RETRY_DELAY,
                     )
                     self._reset_character_revive_observations()
-                    self._character_revive_retry_at = (
-                        now + CHARACTER_REVIVE_RETRY_DELAY
-                    )
+                    self._character_revive_retry_at = now + CHARACTER_REVIVE_RETRY_DELAY
                     return True
                 if (
                     character_state == CHARACTER_DEATH_WAITING
@@ -271,7 +400,12 @@ class DeathView(AI):
         if self._character_revive_target_clicked:
             state.logger.info("角色復活畫面已消失，最後一次目標 click 可能成功")
         self._reset_character_revive_observations()
-        revive_box = self._find_player_death_revive_box(screen)
+        try:
+            revive_box = self._find_player_death_revive_box(screen)
+        except Exception:
+            # OCR 失敗: 視為未偵測到復活提示, 不中斷 check
+            state.logger.warning("玩家復活提示 OCR 失敗")
+            revive_box = None
         if revive_box is not None and self.allow_revive:
             charges_present, charges = self.revive_charge_status(screen)
             state.logger.debug(
@@ -290,11 +424,75 @@ class DeathView(AI):
                     self.min_revive_charges,
                 )
             else:
+                if (
+                    self.wait_if_last_revive_charge
+                    and charges == 1
+                    and not self._revive_charge_wait_done
+                ):
+                    if self._revive_charge_wait_until is None:
+                        self._revive_charge_wait_until = (
+                            time.monotonic() + self.revive_charge_wait_seconds
+                        )
+                        self._revive_charge_wait_last_shown = None
+                        state.logger.warning(
+                            "復活之火只剩最後一個，等待 %.2f 小時 (%.0f 秒) 後再復活",
+                            self.revive_charge_wait_seconds / 3600,
+                            self.revive_charge_wait_seconds,
+                        )
+                        self._show_revive_charge_countdown()
+                        return True
+                    remaining = self._revive_charge_wait_until - time.monotonic()
+                    if remaining > 0:
+                        self._show_revive_charge_countdown(remaining)
+                        return True
+                    # 截止: 結束倒數, 鎖存「本提示 episode 已等待過」,
+                    # 避免復活後提示仍在時立刻又進入兩小時等待。
+                    self._revive_charge_wait_until = None
+                    self._revive_charge_wait_last_shown = None
+                    self._revive_charge_wait_done = True
+                    print()
+                    state.logger.info("復活之火恢復等待結束，執行復活")
                 click_at(calculate_click_point(revive_box[:2], revive_box[2:]))
                 state.logger.info("已使用復活之火，等待 %.1f 秒", self.delay_revive)
                 time.sleep(self.delay_revive)
             return True
+        # 玩家復活提示不在畫面上: 等待/鎖存狀態由 check 開頭的連續
+        # 兩次確認統一清除(避免單次 OCR 失敗誤清), 這裡不需重複處理。
         return False
+
+    def _clear_revive_charge_wait(self) -> None:
+        """清除復活之火等待狀態(提示 episode 結束時呼叫)。"""
+        if self._revive_charge_wait_until is not None:
+            print()
+        self._revive_charge_wait_until = None
+        self._revive_charge_wait_last_shown = None
+        self._revive_charge_wait_done = False
+        self._revive_charge_wait_missing_frames = 0
+
+    def _show_revive_charge_countdown(self, remaining: float = None) -> None:
+        """在 CLI 以 \r 覆寫同一行即時顯示等待剩餘時間。
+
+        只用 print(不走 logger), 因此不會寫入 log 檔案;
+        每秒更新一次, 剩餘秒數不變時跳過。顯示用 ceil:
+        剛開始的 7140 秒顯示 01:59:00(而非 floor 的 01:58:59)。
+        """
+        if remaining is None:
+            remaining = self._revive_charge_wait_until - time.monotonic()
+        shown = max(0, int(remaining))
+        if remaining > shown:
+            shown += 1
+        if shown == self._revive_charge_wait_last_shown:
+            return
+        self._revive_charge_wait_last_shown = shown
+        hours, rem = divmod(shown, 3600)
+        minutes, seconds = divmod(rem, 60)
+        print(
+            f"\r等待復活之火恢復剩餘 {hours:02d}:{minutes:02d}:{seconds:02d}",
+            end="",
+            flush=True,
+        )
+        if shown <= 0:
+            print()
 
     def _log_character_death_state(self, character_state) -> None:
         if character_state != self._last_character_death_state:
@@ -317,12 +515,50 @@ class DeathView(AI):
         self._character_revive_last_click = None
         self._character_revive_deadline_logged = False
         self._character_revive_session_expired = False
-        self._last_character_revive_log = 0.0
-        self._character_revive_band_rejections = 0
-        self._character_revive_cycle_reached_target = False
+        self._character_revive_cycle_shrinking = False
+        self._character_revive_session_min_radius = None
+        self._character_revive_min_dwell = 0
+        self._character_revive_last_radius = None
+        self._character_revive_stable_radius_frames = 0
+        self._character_revive_shrink_history = []
+        self._character_revive_cycle_started_at = None
+        self._character_revive_cycle_max_radius = None
+        self._character_revive_cycle_min_radius = None
+        self._character_revive_static_ring_radius = None
+        self._character_revive_static_ring_pending = None
+        self._character_revive_static_ring_frames = 0
+        self._character_revive_cycle_count = 0
+        self._character_revive_model_ready = False
+        # 本輪已錯過預測點擊窗口(eta < 下界): 抑制同輪的 ring_at_min/
+        # ring_settled 補點(太晚送出), 等下一輪收縮再點。
+        self._character_revive_cycle_missed_predict = False
+        self._character_revive_model_epoch = None
+        self._character_revive_model_expired = False
         self._character_revive_retry_at = None
         self._character_revive_post_click_until = None
         self._character_revive_timeout_until = None
+
+    def _reset_character_revive_history(self) -> None:
+        """Clear ring/target observations for a new shrink cycle while keeping
+        the session (deadline, activation) intact."""
+        self._character_revive_history.clear()
+        self._character_revive_target_history.clear()
+        self._character_revive_stable_target = None
+        self._character_revive_stable_target_at = None
+        # 注意: cycle_shrinking 不在此清除 — 它是「上一週期已完整收縮」的
+        # 證據, 必須跨越點擊後的 history 重置, 直到下一次外圈重置才歸零
+        self._character_revive_min_dwell = 0
+        self._character_revive_last_radius = None
+        self._character_revive_stable_radius_frames = 0
+        self._character_revive_shrink_history = []
+        self._character_revive_cycle_started_at = None
+        self._character_revive_cycle_max_radius = None
+        # 點擊後重置: 清除「錯過預測窗口」標記(下一輪重新計算)
+        self._character_revive_cycle_missed_predict = False
+        # 保留 cycle_min_radius: 它是「ring 真正到達過的最小半徑」,
+        # 必須跨週期/跨點擊保留, 否則收縮中繼半徑會被誤當成最小值
+        # 保留 last_click: 冷卻時間跨週期持續, 預測點擊後不會在同一
+        # 收縮週期內再被 ring_at_min 補點一次
 
     def _has_active_character_revive_session(self, screen, now, exit_box=None) -> bool:
         if exit_box is None:
@@ -333,8 +569,8 @@ class DeathView(AI):
             # where the target mask is temporarily invisible.
             present = exit_box is not None and self._has_character_ring(screen)
         elif self._character_revive_session_mode == CHARACTER_REVIVE_SESSION_OVERLAY:
-            present = (
-                exit_box is not None and self._has_character_death_signature(screen)
+            present = exit_box is not None and self._has_character_death_signature(
+                screen
             )
         else:
             present = False
@@ -383,10 +619,6 @@ class DeathView(AI):
             if not self._character_revive_deadline_logged:
                 state.logger.warning("角色復活圓環追蹤逾時，未以無證據點擊")
                 self._character_revive_deadline_logged = True
-                try:
-                    dump4log(screen, "角色復活圓環逾時")
-                except Exception:
-                    pass
             self._character_revive_session_expired = True
             self._character_revive_activated = False
             self._character_revive_session_mode = None
@@ -394,34 +626,71 @@ class DeathView(AI):
                 now + CHARACTER_REVIVE_TIMEOUT_COOLDOWN
             )
             return None
-        observation = self.character_revive_observation(screen)
-        if observation is None:
-            if now - self._last_character_revive_log >= CHARACTER_REVIVE_LOG_INTERVAL:
-                state.logger.debug("角色復活圓環未偵測到有效觀測")
-                self._last_character_revive_log = now
-            return None
-        should_click = observation["click_ready"] and observation["in_target_window"]
-        if should_click and self._character_revive_click_allowed(now):
-            self._click_character_revive(now, observation)
-        if now - self._last_character_revive_log >= CHARACTER_REVIVE_LOG_INTERVAL:
-            state.logger.debug(
-                "角色復活圓環 radius=%.1f target=%.1f target_measured=%s "
-                "target_currently_measured=%s target_mode=%s target_confidence=%.2f "
-                "target_tolerance=%.1f confidence=%.2f velocity=%s eta=%s measured=%s",
-                observation["radius"],
-                observation["target_radius"],
-                observation["target_measured"],
-                observation["target_currently_measured"],
-                observation["target_detection_mode"],
-                observation["target_confidence"],
-                observation["target_tolerance"],
-                observation["confidence"],
-                self._format_measurement(observation["velocity"]),
-                self._format_measurement(observation["eta"]),
-                observation["measured"],
+        # 密集採樣: 一個收縮週期僅約 0.3 秒，必須在同一次 check 內連續取幀，
+        # 直到成功點擊、畫面確認完成或預算耗盡。
+        budget_end = now + CHARACTER_REVIVE_OBSERVE_BUDGET
+        last_log = 0.0
+        while time.monotonic() <= budget_end:
+            screen = get_window_screen()
+            observation = self.character_revive_observation(screen)
+            now = time.monotonic()
+            if observation is None:
+                if now - last_log >= CHARACTER_REVIVE_LOG_INTERVAL:
+                    state.logger.debug("角色復活圓環未偵測到有效觀測")
+                    last_log = now
+                time.sleep(CHARACTER_REVIVE_OBSERVE_STEP)
+                continue
+            should_click = (
+                (
+                    observation["ring_settled"]
+                    and self._character_revive_click_allowed(now)
+                )
+                or (
+                    observation["ring_at_min"]
+                    and observation["measured"]
+                    and observation["shrink_observed"]
+                    and self._character_revive_click_allowed(now)
+                )
+                or (
+                    observation["ring_at_absolute_min"]
+                    and observation["measured"]
+                    and self._character_revive_click_allowed(now)
+                )
+                or (
+                    observation["predicted_ready"]
+                    and self._character_revive_click_allowed(now)
+                )
             )
-            self._last_character_revive_log = now
-        return observation
+            if should_click:
+                self._click_character_revive(now, observation)
+                # 每點擊一次重新觀察與計算
+                self._reset_character_revive_history()
+                return observation
+            if now - last_log >= CHARACTER_REVIVE_LOG_INTERVAL:
+                state.logger.debug(
+                    "角色復活圓環 radius=%.1f target=%.1f target_measured=%s "
+                    "target_currently_measured=%s target_mode=%s "
+                    "target_confidence=%.2f "
+                    "target_tolerance=%.1f confidence=%.2f velocity=%s measured=%s "
+                    "predicted_ready=%s predicted_eta=%s predicted_velocity=%s",
+                    observation["radius"],
+                    observation["target_radius"],
+                    observation["target_measured"],
+                    observation["target_currently_measured"],
+                    observation["target_detection_mode"],
+                    observation["target_confidence"],
+                    observation["target_tolerance"],
+                    observation["confidence"],
+                    self._format_measurement(observation["velocity"]),
+                    observation["measured"],
+                    observation["predicted_ready"],
+                    self._format_measurement(observation["predicted_eta"]),
+                    self._format_measurement(observation["predicted_velocity"]),
+                )
+                last_log = now
+            time.sleep(CHARACTER_REVIVE_OBSERVE_STEP)
+        state.logger.debug("角色復活圓環觀測預算耗盡")
+        return None
 
     def _character_revive_click_allowed(self, now) -> bool:
         return self._character_revive_last_click is None or (
@@ -434,8 +703,9 @@ class DeathView(AI):
         state.logger.info(
             "Character revive %s center radius=%.1f target=%.1f target_measured=%s "
             "target_currently_measured=%s target_mode=%s target_confidence=%.2f "
-            "target_tolerance=%.1f confidence=%.2f velocity=%s eta=%s measured=%s "
-            "measured_frames=%s in_target_window=%s click_margin=%.2f",
+            "target_tolerance=%.1f confidence=%.2f velocity=%s measured=%s "
+            "measured_frames=%s ring_at_min=%s ring_settled=%s predicted_ready=%s "
+            "predicted_eta=%s predicted_velocity=%s click_margin=%.2f",
             action,
             observation.get("radius", 0.0),
             observation.get("target_radius", 0.0),
@@ -446,10 +716,13 @@ class DeathView(AI):
             observation.get("target_tolerance", 0.0),
             observation.get("confidence", 0.0),
             self._format_measurement(observation.get("velocity")),
-            self._format_measurement(observation.get("eta")),
             observation.get("measured", False),
             observation.get("measured_frames", 0),
-            observation.get("in_target_window", False),
+            observation.get("ring_at_min", False),
+            observation.get("ring_settled", False),
+            observation.get("predicted_ready", False),
+            self._format_measurement(observation.get("predicted_eta")),
+            self._format_measurement(observation.get("predicted_velocity")),
             CHARACTER_REVIVE_CLICK_RADIUS_MARGIN,
         )
         if self.character_revive_dry_run:
@@ -495,10 +768,12 @@ class DeathView(AI):
         else:
             target_radius = CHARACTER_REVIVE_TARGET_RADIUS * height
             tolerance = CHARACTER_REVIVE_TARGET_TOLERANCE * height
-        min_radius = max(
-            CHARACTER_REVIVE_RING_MIN_RADIUS,
-            target_radius + tolerance,
-        )
+        # 靜態白環(中央盤緣/UI 圓圈)的時間連續性確認: 同一半徑持續出現
+        # 高白環分數才視為靜態。移動中的 ring 穿過 r60-120 時半徑會變化,
+        # 無法連續確認, 不會誤觸發。
+        self._character_revive_update_static_ring(screen, now)
+        # 允許測量收縮到 target 以下的 ring，只保留物理下限
+        min_radius = CHARACTER_REVIVE_RING_MIN_RADIUS
         radius, confidence = self._character_revive_ring_measurement(
             screen, now, min_radius
         )
@@ -509,13 +784,90 @@ class DeathView(AI):
                 # ring; do not let them reset or poison the shrinking history.
                 radius = None
                 measured = False
-            elif not self._character_revive_measurement_is_consistent(
-                radius, now, height, target_radius
-            ):
-                radius = None
-                measured = False
             else:
-                self._character_revive_history.append((now, radius, confidence))
+                consistency = self._character_revive_measurement_is_consistent(
+                    radius, now
+                )
+                if consistency == "reset":
+                    # 外圈重置：新一輪收縮開始，清空歷史重新觀察。
+                    # 只有在前一週期已完整收縮過(觀察到遞減)才計入週期數,
+                    # 避免漸進擴張的多幀各自被當成一次 reset 而灌水週期數。
+                    state.logger.debug(
+                        "角色復活圓環重置，開始新一輪收縮 radius=%.1f", radius
+                    )
+                    self._reset_character_revive_history()
+                    self._character_revive_shrink_history.clear()
+                    if self._character_revive_cycle_shrinking:
+                        self._character_revive_cycle_count += 1
+                        self._character_revive_model_expired = False
+                        if self._character_revive_cycle_count >= 2:
+                            # 至少觀察一個完整週期後, 預測模型才可用
+                            self._character_revive_model_ready = True
+                    # 週期結束: 以本週期實際最小半徑更新 session 最小值
+                    if self._character_revive_cycle_min_radius is not None and (
+                        self._character_revive_session_min_radius is None
+                        or self._character_revive_cycle_min_radius
+                        < self._character_revive_session_min_radius
+                    ):
+                        self._character_revive_session_min_radius = (
+                            self._character_revive_cycle_min_radius
+                        )
+                    # 新一輪週期開始: 收縮證據歸零; 週期最小半徑跨週期保留
+                    # (它是「ring 真正到達過的最小半徑」, 重置外圈不應把它
+                    # 洗掉, 否則收縮途中的中繼半徑會立刻被當成最小值)
+                    self._character_revive_cycle_shrinking = False
+                    self._character_revive_cycle_started_at = now
+                    self._character_revive_cycle_max_radius = radius
+                    # 新一輪開始: 清除「錯過預測窗口」標記
+                    self._character_revive_cycle_missed_predict = False
+                    self._character_revive_history.append((now, radius, confidence))
+                elif not consistency:
+                    radius = None
+                    measured = False
+                else:
+                    self._character_revive_history.append((now, radius, confidence))
+        # 以「本幀更新前」的週期最小半徑判斷是否到達最小:
+        # 使用雙向鄰近比較 (abs(radius - cycle_min) <= tolerance)。
+        # 單向的 radius <= cycle_min + tolerance 在 ring 縮到比 cycle_min
+        # 更小時仍然成立, 會讓收縮途中(例如錯誤的最小值 250 之後繼續
+        # 縮到 200)誤判為「已到達最小」而提前點擊。
+        prev_radius = self._character_revive_last_radius
+        at_session_min = (
+            measured
+            and self._character_revive_cycle_min_radius is not None
+            and abs(radius - self._character_revive_cycle_min_radius)
+            <= CHARACTER_REVIVE_MIN_RADIUS_TOLERANCE
+        )
+        # 仍在持續收縮(比前一幀明顯更小)時, 即使落在最小半徑容差帶內,
+        # 也不算「停留於最小」: 例如 250→247→244 會逐幀累積 dwell,
+        # 造成 ring 還在縮小時就提前點擊。
+        still_shrinking = (
+            prev_radius is not None
+            and radius is not None
+            and radius < prev_radius - CHARACTER_REVIVE_CYCLE_MIN_STABLE_TOLERANCE
+        )
+        if measured and radius is not None:
+            # 週期最小半徑: 只有在 ring「停留」於該半徑時才更新(跨週期保留)。
+            # 停留判定使用嚴格容差(2px): 收縮途中的中繼半徑(如 367→362,
+            # 相差 5px)不會被當成停留; 只有 ring 真正到達並停留在本輪
+            # 最低點(如 120/55)才更新, 避免 ring_at_min 提前點擊。
+            if (
+                self._character_revive_last_radius is not None
+                and abs(radius - self._character_revive_last_radius)
+                <= CHARACTER_REVIVE_CYCLE_MIN_STABLE_TOLERANCE
+            ):
+                self._character_revive_stable_radius_frames += 1
+            else:
+                self._character_revive_stable_radius_frames = 0
+            self._character_revive_last_radius = radius
+            if self._character_revive_stable_radius_frames >= (
+                CHARACTER_REVIVE_CYCLE_MIN_STABLE_FRAMES - 1
+            ):
+                if (
+                    self._character_revive_cycle_min_radius is None
+                    or radius < self._character_revive_cycle_min_radius
+                ):
+                    self._character_revive_cycle_min_radius = radius
         if not measured:
             prediction = self._character_revive_prediction(now, height)
             if prediction is None:
@@ -523,10 +875,6 @@ class DeathView(AI):
             radius, velocity, confidence = prediction
         else:
             velocity = self._character_revive_velocity()
-        if target_measured and radius <= (
-            target_radius + CHARACTER_REVIVE_CLICK_RADIUS_MARGIN
-        ):
-            self._character_revive_cycle_reached_target = True
         measured_frames = len(self._character_revive_history)
         has_evidence = (
             measured_frames >= CHARACTER_REVIVE_MIN_MEASURED_FRAMES
@@ -537,13 +885,88 @@ class DeathView(AI):
             and min(entry[2] for entry in self._character_revive_history)
             >= CHARACTER_REVIVE_MIN_MEASURED_CONFIDENCE
         )
-        eta = None
-        if velocity is not None and velocity < 0 and radius > target_radius:
-            eta = (radius - target_radius) / -velocity
-        in_target_window = (
-            target_measured
-            and radius <= target_radius + CHARACTER_REVIVE_CLICK_RADIUS_MARGIN
-            and has_evidence
+        # 本週期內只要觀察到一次有效收縮，就算有收縮證據。
+        # 一旦 ring 到達 target 後靜止(velocity 變 None)仍可點擊；
+        # 但啟動時若 ring 已在窗口內(從未觀察到收縮)則不點擊。
+        if has_evidence:
+            self._character_revive_cycle_shrinking = True
+        shrink_observed = self._character_revive_cycle_shrinking
+        # 收縮後停止偵測: 連續多幀半徑幾乎不變 => ring 已收縮到最小(到達中心)。
+        # 當 target 無法測量時(黃色中心不可見)此訊號是唯一可靠的點擊依據。
+        ring_settled = self._character_revive_ring_settled()
+        if at_session_min and not still_shrinking:
+            self._character_revive_min_dwell += 1
+        else:
+            self._character_revive_min_dwell = 0
+        ring_at_min = at_session_min and self._character_revive_min_dwell >= 2
+        predicted_eta, predicted_velocity = self._character_revive_predicted_arrival(
+            radius, now
+        )
+        if (
+            predicted_eta is not None
+            and predicted_eta < CHARACTER_REVIVE_PREDICT_LEAD_MIN
+        ):
+            # 錯過本輪預測點擊窗口(eta 已低於下界, 環即將/已到達中心):
+            # 點擊此刻送出會在生效時錯過 min, 抑制本輪其餘補點,
+            # 等下一輪收縮(週期僅 ~0.3s)再點。
+            self._character_revive_cycle_missed_predict = True
+        elif (
+            predicted_eta is None
+            and self._character_revive_model_ready
+            and radius is not None
+            and self._character_revive_session_min_radius is not None
+            and radius
+            <= self._character_revive_session_min_radius
+            + CHARACTER_REVIVE_MIN_RADIUS_TOLERANCE
+        ):
+            # 模型就緒但環已到達/超過最小半徑(觀測間隔跳過預測窗口,
+            # predicted_arrival 回傳 None): 本輪已錯過窗口, 抑制補點。
+            self._character_revive_cycle_missed_predict = True
+        # 絕對最小半徑: 某些極端畫面的環收縮到非常接近中心(radius 很小)
+        # 且幾乎不停留(下一個觀測就重置), cycle_min/停留機制無法建立。
+        # 在 predicted_arrival 之後計算, 讓 shrink_history 已含當前幀。
+        # 關鍵: 點擊必須在「環到達中心」的時刻生效。系統延遲(點擊送出到
+        # 遊戲生效)約 50-60ms, 因此點擊要在環離中心還有 CLICK_LATENCY 的
+        # 時間時送出 — 即 eta = radius / -velocity 落在 [ETA_MIN, ETA_MAX]。
+        # 太晚送出(eta 過小): 點擊生效時環已擴張 → 失敗(扣血);
+        # 太早送出(eta 過大): 點擊生效時環還沒到中心 → 失敗。
+        # 其餘守衛: 收縮軌跡 >= 2 樣本、外圈 cycle_max >= 150(排除靜態
+        # r80 盤緣/死亡等待靜態環)。
+        at_absolute_min = (
+            measured
+            and velocity is not None
+            and velocity < 0
+            and len(self._character_revive_shrink_history) >= 2
+            and self._character_revive_cycle_max_radius is not None
+            and self._character_revive_cycle_max_radius
+            >= CHARACTER_REVIVE_ABSOLUTE_MIN_OUTER_RADIUS
+            and CHARACTER_REVIVE_ABSOLUTE_MIN_ETA_MIN
+            <= radius / -velocity
+            <= CHARACTER_REVIVE_ABSOLUTE_MIN_ETA_MAX
+        )
+        # 記錄 absolute_min 為獨立訊號: 它本身已含「本週期/歷史見過更大環」
+        # 的收縮證據, 點擊條件不需再額外要求 shrink_observed
+        ring_at_absolute_min = at_absolute_min
+        if at_absolute_min:
+            ring_at_min = True
+        if self._character_revive_cycle_missed_predict:
+            # 本輪預測窗口已錯過: 太晚的 at_min/settled 補點會失效,
+            # 一律抑制, 等待下一輪收縮。
+            ring_at_min = False
+            ring_settled = False
+            ring_at_absolute_min = False
+        predicted_ready = (
+            measured
+            and predicted_eta is not None
+            and CHARACTER_REVIVE_PREDICT_LEAD_MIN
+            <= predicted_eta
+            <= CHARACTER_REVIVE_PREDICT_LEAD
+            and radius
+            > (
+                self._character_revive_session_min_radius
+                if self._character_revive_session_min_radius is not None
+                else 0.0
+            )
         )
         return {
             "radius": radius,
@@ -556,24 +979,54 @@ class DeathView(AI):
             "click_margin": CHARACTER_REVIVE_CLICK_RADIUS_MARGIN,
             "confidence": confidence,
             "velocity": velocity,
-            "eta": eta,
-            "in_target_window": in_target_window,
             "measured": measured,
             "measured_frames": measured_frames,
-            "click_ready": has_evidence and target_measured,
+            "ring_settled": ring_settled and shrink_observed,
+            "ring_at_min": ring_at_min,
+            "ring_at_absolute_min": ring_at_absolute_min,
+            "shrink_observed": shrink_observed,
+            "predicted_eta": predicted_eta,
+            "predicted_velocity": predicted_velocity,
+            "predicted_ready": predicted_ready,
         }
+
+    def _character_revive_ring_settled(self) -> bool:
+        """True when the ring radius has been nearly constant for the last few
+        frames, i.e. the shrink cycle has reached its minimum.
+
+        Guards against mid-shrink pauses: the ring must have first been seen
+        to shrink from a substantially larger radius before a stable tail
+        counts as settled.
+        """
+        history = self._character_revive_history
+        if len(history) < CHARACTER_REVIVE_SETTLE_FRAMES:
+            return False
+        recent = list(history)[-CHARACTER_REVIVE_SETTLE_FRAMES:]
+        radii = [entry[1] for entry in recent]
+        if max(radii) - min(radii) > CHARACTER_REVIVE_SETTLE_TOLERANCE:
+            return False
+        tail = radii[0]
+        # 收縮距離驗證: 歷史中必須出現過明顯大於穩定尾端的半徑,
+        # 否則可能是收縮中途的短暫停頓而非真正到達中心。
+        max_seen = max(entry[1] for entry in history)
+        return max_seen >= tail * 2.0 + CHARACTER_REVIVE_RING_MIN_RADIUS * 2
 
     def _character_revive_target_measurement(self, screen, now):
         radius, confidence, detection_mode = self._character_revive_target_candidate(
             screen
         )
         height = screen.shape[0]
+        max_radius = (
+            CHARACTER_TARGET_DISK_MAX_RADIUS * height
+            if detection_mode == "disk"
+            else CHARACTER_TARGET_MAX_RADIUS * height
+        )
         if (
             radius is not None
             and confidence >= CHARACTER_TARGET_MIN_CONFIDENCE
             and CHARACTER_REVIVE_DIRECT_TARGET_MIN_RADIUS * height
             <= radius
-            <= CHARACTER_TARGET_MAX_RADIUS * height
+            <= max_radius
         ):
             if (
                 self._character_revive_stable_target is None
@@ -600,7 +1053,7 @@ class DeathView(AI):
         weak_confirmed = self._weak_target_confirmed(history)
         neutral_confirmed = self._target_mode_confirmed(history, "neutral")
         current_reliable = (
-            detection_mode == "strong"
+            detection_mode in ("strong", "disk")
             or (detection_mode == "weak" and weak_confirmed)
             or (
                 detection_mode == "neutral"
@@ -619,7 +1072,11 @@ class DeathView(AI):
                 detection_mode,
             )
         if history and now - history[-1][0] <= CHARACTER_TARGET_HISTORY_BRIDGE:
-            if history[-1][3] == "strong" or weak_confirmed or neutral_confirmed:
+            if (
+                history[-1][3] in ("strong", "disk")
+                or weak_confirmed
+                or neutral_confirmed
+            ):
                 return (
                     float(np.median([entry[1] for entry in history])),
                     float(np.median([entry[2] for entry in history])),
@@ -656,7 +1113,7 @@ class DeathView(AI):
         if any(entry[3] != mode for entry in samples):
             return False
         radii = [entry[1] for entry in samples]
-        if mode == "neutral":
+        if mode in ("neutral", "disk"):
             tolerance = CHARACTER_NEUTRAL_TARGET_CONFIRMATION_TOLERANCE
         else:
             tolerance = max(
@@ -671,8 +1128,16 @@ class DeathView(AI):
         return radius, confidence
 
     def _character_revive_target_candidate(self, screen):
-        """Prefer a strong target; use constrained faint-target geometry as fallback."""
+        """Prefer the yellow center disk; fall back to constrained geometry.
+
+        The yellow target circle is dim in video captures and may be partially
+        occluded on the right side, so the relaxed disk detector is tried
+        first and the legacy strong/weak/neutral pass is kept as fallback.
+        """
         height, width = screen.shape[:2]
+        disk = self._character_revive_target_disk(screen)
+        if disk[0] is not None:
+            return disk[0], disk[1], "disk"
         crop, _, _ = self._crop_normalized(screen, CHARACTER_TARGET_REGION)
         if crop.size == 0:
             return None, 0.0, None
@@ -735,6 +1200,53 @@ class DeathView(AI):
             return neutral[0], neutral[1], "neutral"
         return None, 0.0, None
 
+    def _character_revive_target_disk(self, screen):
+        """Detect the yellow center disk with relaxed thresholds.
+
+        The target is a filled circle whose radius varies between occasions
+        and whose right half may be occluded, so only the largest yellow
+        component near the screen center is used.
+        """
+        height, width = screen.shape[:2]
+        crop, _, _ = self._crop_normalized(
+            screen,
+            (
+                0.5 - CHARACTER_TARGET_DISK_CENTER_SEARCH / 2,
+                0.5 + CHARACTER_TARGET_DISK_CENTER_SEARCH / 2,
+                0.5 - CHARACTER_TARGET_DISK_CENTER_SEARCH / 2,
+                0.5 + CHARACTER_TARGET_DISK_CENTER_SEARCH / 2,
+            ),
+        )
+        if crop.size == 0:
+            return None, 0.0
+        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(
+            hsv, CHARACTER_TARGET_DISK_HSV_LOWER, CHARACTER_TARGET_DISK_HSV_UPPER
+        )
+        count, labels, stats, centroids = cv2.connectedComponentsWithStats(mask)
+        max_radius = CHARACTER_TARGET_DISK_MAX_RADIUS * height
+        best = (None, 0.0)
+        for label in range(1, count):
+            area = stats[label, cv2.CC_STAT_AREA]
+            if area < CHARACTER_TARGET_DISK_MIN_AREA:
+                continue
+            component_width = stats[label, cv2.CC_STAT_WIDTH]
+            component_height = stats[label, cv2.CC_STAT_HEIGHT]
+            radius = max(component_width, component_height) / 2
+            if not (CHARACTER_TARGET_DISK_MIN_RADIUS <= radius <= max_radius):
+                continue
+            ccx, ccy = centroids[label]
+            offset = np.hypot(crop.shape[1] / 2 - ccx, crop.shape[0] / 2 - ccy)
+            if offset > radius * 0.8:
+                continue
+            fill_ratio = area / (np.pi * radius * radius)
+            confidence = 0.6 * min(1.0, fill_ratio) + 0.4 * max(
+                0.0, 1.0 - offset / max(radius, 1.0)
+            )
+            if confidence > best[1]:
+                best = (float(radius), float(confidence))
+        return best
+
     @staticmethod
     def _target_candidate_from_mask(
         mask,
@@ -782,9 +1294,15 @@ class DeathView(AI):
                 best = (radius, float(candidate_confidence))
         return best
 
-    def _character_revive_measurement_is_consistent(
-        self, radius, now, height, target_radius
-    ) -> bool:
+    def _character_revive_measurement_is_consistent(self, radius, now):
+        """Classify a new ring measurement against the shrinking history.
+
+        Returns:
+          True     - measurement accepted as part of the current shrink cycle
+          False    - measurement rejected (keep waiting)
+          "reset"  - the ring jumped back to the outer band: a new shrink
+                     cycle started, callers should clear history and accept
+        """
         history = self._character_revive_history
         if not history:
             return True
@@ -792,41 +1310,67 @@ class DeathView(AI):
         gap = max(now - previous_time, 0.001)
         shrink = previous_radius - radius
         if shrink >= 0:
-            self._character_revive_band_rejections = 0
+            # Shrinking: accept within the physical speed bound.
             return shrink <= CHARACTER_REVIVE_MAX_SHRINK_SPEED * gap
-        if (
-            not self._character_revive_cycle_reached_target
-            and previous_radius
-            <= target_radius + CHARACTER_REVIVE_CLICK_RADIUS_MARGIN
-        ):
-            self._character_revive_cycle_reached_target = True
-        if not self._character_revive_cycle_reached_target:
-            # The ring only resets after reaching the yellow center. Any
-            # upward jump before that point is a false outer-ring candidate.
-            self._character_revive_band_rejections = 0
-            return False
-        band_min = (
-            CHARACTER_REVIVE_MAX_RADIUS * height * CHARACTER_REVIVE_OUTER_RESET_RATIO
+        # Growing. The ring expands back outward before the next shrink cycle;
+        # any growth beyond measurement noise starts a new cycle. Rejecting
+        # growth would discard otherwise valid observations.
+        if radius - previous_radius > CHARACTER_REVIVE_MIN_RADIUS_TOLERANCE:
+            return "reset"
+        # 最小半徑附近的微小抖動(1~2px)是測量雜訊, 視為可接受
+        return True
+
+    def _character_revive_update_static_ring(self, screen, now) -> None:
+        """以時間連續性確認中央靜態白環。
+
+        某些復活畫面在 r~60-120 有恆定的白環(黃色圓盤邊緣/UI 圓圈),
+        會蓋住真正收縮的大白環。此處追蹤每一幀的白環候選半徑, 只有
+        同一半徑連續多幀出現(>=STATIC_RING_CONFIRM_FRAMES)才確認,
+        避免把收縮途中穿過此帶的移動 ring 誤判為靜態。
+        """
+        height, width = screen.shape[:2]
+        center_x, center_y = width // 2, height // 2
+        hsv = cv2.cvtColor(screen, cv2.COLOR_BGR2HSV)
+        angles = np.linspace(
+            0, 2 * np.pi, CHARACTER_REVIVE_SAMPLE_COUNT, endpoint=False
         )
-        if radius >= band_min:
-            if previous_radius >= band_min and (
-                radius - previous_radius
-            ) <= CHARACTER_REVIVE_BOUNDARY_BAND_GROWTH_LIMIT * height:
-                self._character_revive_band_rejections += 1
-                if (
-                    self._character_revive_band_rejections
-                    >= CHARACTER_REVIVE_BOUNDARY_RESET_FRAMES
-                ):
-                    history.clear()
-                    self._character_revive_band_rejections = 0
-                    self._character_revive_cycle_reached_target = False
-                    return True
-                return False
-            history.clear()
-            self._character_revive_cycle_reached_target = False
-            return True
-        self._character_revive_band_rejections = 0
-        return False
+        best_radius, best_score = None, 0.0
+        for radius in range(
+            CHARACTER_REVIVE_STATIC_RING_MIN_RADIUS,
+            CHARACTER_REVIVE_STATIC_RING_MAX_RADIUS + 1,
+            2,
+        ):
+            xs = np.rint(center_x + radius * np.cos(angles)).astype(int)
+            ys = np.rint(center_y + radius * np.sin(angles)).astype(int)
+            valid = (xs >= 0) & (xs < width) & (ys >= 0) & (ys < height)
+            saturation = hsv[ys.clip(0, height - 1), xs.clip(0, width - 1), 1]
+            value = hsv[ys.clip(0, height - 1), xs.clip(0, width - 1), 2]
+            score = float((valid & (saturation <= 70) & (value >= 180)).mean())
+            if score >= CHARACTER_REVIVE_STATIC_RING_MIN_SCORE and score > best_score:
+                best_radius, best_score = radius, score
+        # 分離「候選」與「已確認」: 同一半徑連續多幀出現才確認靜態,
+        # 未確認前不切換 ring 測量模式(避免移動 ring 穿過此帶時誤判)。
+        if (
+            best_radius is not None
+            and best_radius == self._character_revive_static_ring_pending
+        ):
+            self._character_revive_static_ring_frames += 1
+            if (
+                self._character_revive_static_ring_frames
+                >= CHARACTER_REVIVE_STATIC_RING_CONFIRM_FRAMES
+            ):
+                if self._character_revive_static_ring_radius is None:
+                    # 確認的瞬間, 清除確認前由靜態盤緣污染的量測狀態:
+                    # 確認前的 ring 半徑都是盤緣(r~80), 不是真正的大環,
+                    # 若不清除, 週期最小值會被設成 80, ring_at_min 永遠不觸發
+                    self._character_revive_cycle_min_radius = None
+                    self._character_revive_last_radius = None
+                    self._character_revive_stable_radius_frames = 0
+                    self._character_revive_min_dwell = 0
+                self._character_revive_static_ring_radius = best_radius
+        else:
+            self._character_revive_static_ring_pending = best_radius
+            self._character_revive_static_ring_frames = 1
 
     def _character_revive_ring_measurement(self, screen, now, min_radius):
         height, width = screen.shape[:2]
@@ -837,52 +1381,62 @@ class DeathView(AI):
         )
         if min_radius > max_radius:
             return None, 0.0
-        radii = np.arange(min_radius, max_radius + 1)
         angles = np.linspace(
             0, 2 * np.pi, CHARACTER_REVIVE_SAMPLE_COUNT, endpoint=False
         )
-        xs = np.rint(center_x + radii[:, None] * np.cos(angles)).astype(int)
-        ys = np.rint(center_y + radii[:, None] * np.sin(angles)).astype(int)
-        valid = (xs >= 0) & (xs < width) & (ys >= 0) & (ys < height)
         hsv = cv2.cvtColor(screen, cv2.COLOR_BGR2HSV)
-        saturation = hsv[ys.clip(0, height - 1), xs.clip(0, width - 1), 1]
-        value = hsv[ys.clip(0, height - 1), xs.clip(0, width - 1), 2]
-        bright_white = valid & (saturation <= 70) & (value >= 180)
-        scores = bright_white.mean(axis=1)
-        candidates = np.flatnonzero(scores >= CHARACTER_REVIVE_SCORE_THRESHOLD)
-        if candidates.size == 0:
-            red_overlay = (
+        sat_ch = hsv[:, :, 1]
+        val_ch = hsv[:, :, 2]
+
+        # 某些復活畫面中央有「靜態白環」(黃色圓盤邊緣/UI 圓圈, r~60-120,
+        # 白環分數恆定 ~1.0), 會蓋住真正持續收縮的大白環, 使 ring 半徑
+        # 永遠測到靜態環而無法觸發點擊。觀測流程會以時間連續性確認靜態
+        # 白環存在, 並傳入 static_radius; 此時只搜尋其外側 r120+ 的亮帶
+        # (真正收縮的大環)。舊畫面無靜態白環時維持原邏輯。
+        static_radius = self._character_revive_static_ring_radius
+        if static_radius is not None:
+            search_min = max(min_radius, CHARACTER_REVIVE_STATIC_RING_EXCLUDE_MIN)
+        else:
+            search_min = min_radius
+        if search_min > max_radius:
+            return None, 0.0
+        radii = np.arange(search_min, max_radius + 1)
+        # 向量化: 一次取樣所有半徑 x 角度 的像素 (原逐半徑迴圈 ~100ms,
+        # 收縮週期僅 ~0.3s, 觀測必須夠快才能抓準點擊時機)
+        xs = np.rint(center_x + radii[:, None] * np.cos(angles)).astype(np.int32)
+        ys = np.rint(center_y + radii[:, None] * np.sin(angles)).astype(np.int32)
+        valid = (xs >= 0) & (xs < width) & (ys >= 0) & (ys < height)
+        xs_c = xs.clip(0, width - 1)
+        ys_c = ys.clip(0, height - 1)
+        sample_sat = sat_ch[ys_c, xs_c]
+        sample_val = val_ch[ys_c, xs_c]
+        if static_radius is not None:
+            # 有靜態盤緣: 大環是低飽和亮帶(白/亮灰), 用較寬鬆門檻
+            mask_ok = (
                 valid
-                & (saturation <= CHARACTER_REVIVE_FALLBACK_MAX_SATURATION)
-                & (value >= CHARACTER_REVIVE_FALLBACK_MIN_VALUE)
+                & (sample_sat <= CHARACTER_REVIVE_FALLBACK_MAX_SATURATION)
+                & (sample_val >= 90)
             )
-            scores = red_overlay.mean(axis=1)
-            candidates = np.flatnonzero(
-                scores >= CHARACTER_REVIVE_FALLBACK_SCORE_THRESHOLD
-            )
+            scores = mask_ok.mean(axis=1)
+            candidates = np.flatnonzero(scores >= CHARACTER_REVIVE_SCORE_THRESHOLD)
+        else:
+            mask_ok = valid & (sample_sat <= 70) & (sample_val >= 180)
+            scores = mask_ok.mean(axis=1)
+            candidates = np.flatnonzero(scores >= CHARACTER_REVIVE_SCORE_THRESHOLD)
+            if candidates.size == 0:
+                mask_ok = (
+                    valid
+                    & (sample_sat <= CHARACTER_REVIVE_FALLBACK_MAX_SATURATION)
+                    & (sample_val >= CHARACTER_REVIVE_FALLBACK_MIN_VALUE)
+                )
+                scores = mask_ok.mean(axis=1)
+                candidates = np.flatnonzero(
+                    scores >= CHARACTER_REVIVE_FALLBACK_SCORE_THRESHOLD
+                )
         if candidates.size == 0:
-            return None, float(scores.max())
-        if self._character_revive_history:
-            previous_time, previous_radius, _ = self._character_revive_history[-1]
-            gap = max(now - previous_time, 0.001)
-            max_shrink = CHARACTER_REVIVE_MAX_SHRINK_SPEED * gap
-            plausible = candidates[
-                (radii[candidates] <= previous_radius)
-                & (radii[candidates] >= previous_radius - max_shrink)
-            ]
-            if plausible.size:
-                index = int(plausible[np.argmax(scores[plausible])])
-                return float(radii[index]), float(scores[index])
-            outer = candidates[
-                radii[candidates]
-                >= CHARACTER_REVIVE_MAX_RADIUS
-                * height
-                * CHARACTER_REVIVE_OUTER_RESET_RATIO
-            ]
-            if outer.size:
-                index = int(outer[np.argmin(np.abs(radii[outer] - previous_radius))])
-                return float(radii[index]), float(scores[index])
-            return None, float(scores[candidates].max())
+            return None, 0.0
+        # 回歸最強候選: 一致性/重置分類交由 _character_revive_measurement_is_consistent
+        # 處理, 這裡不再用前一幀半徑過濾, 以免把合法的外圈/重置觀測丟棄。
         index = int(candidates[np.argmax(scores[candidates])])
         return float(radii[index]), float(scores[index])
 
@@ -913,6 +1467,100 @@ class DeathView(AI):
         if velocity < -CHARACTER_REVIVE_MAX_SHRINK_SPEED:
             return None
         return velocity
+
+    def _character_revive_predicted_arrival(self, radius, now):
+        """預測 ring 到達最小半徑(中心)的剩餘秒數。
+
+        收縮期內每幀半徑線性遞減, 取收縮緩衝區擬合速度即可預測到達時刻;
+        預測模型限於最近 15 秒 / 至多兩個週期的觀察窗口。
+        回傳 (eta, velocity), 無法預測時回傳 (None, None)。
+        """
+        if radius is None:
+            return None, None
+        # 模型觀察窗口 (epoch): 獨立於單一週期, 15 秒過期即重設模型重新學習
+        if self._character_revive_model_epoch is None:
+            self._character_revive_model_epoch = now
+        elif now - self._character_revive_model_epoch > CHARACTER_REVIVE_MODEL_WINDOW:
+            self._character_revive_shrink_history.clear()
+            self._character_revive_cycle_started_at = None
+            self._character_revive_cycle_max_radius = None
+            # 注意: cycle_min_radius 是 session 級的最小半徑, 過期重學不清除
+            self._character_revive_cycle_count = 0
+            was_ready = self._character_revive_model_ready
+            self._character_revive_model_ready = False
+            self._character_revive_model_epoch = now
+            # 只有已就緒(學過完整週期)的模型過期後才允許重建立即恢復;
+            # 初次啟動從未就緒時, 過期後仍須重新通過週期門檻
+            self._character_revive_model_expired = was_ready
+            return None, None
+        if self._character_revive_shrink_history:
+            last_time, last_radius = self._character_revive_shrink_history[-1]
+            if radius > last_radius + CHARACTER_REVIVE_MIN_RADIUS_TOLERANCE:
+                # 明顯增長: 清空趨勢, 由 reset 分支重新開始新週期
+                self._character_revive_shrink_history.clear()
+                return None, None
+            if radius == last_radius:
+                # 重複取幀(取樣快於遊戲幀率)或最小半徑停留: 略過, 不破壞趨勢
+                return None, None
+            if radius > last_radius:
+                # 微幅增長(測量雜訊): 趨勢反轉, 清空避免舊趨勢續用
+                self._character_revive_shrink_history.clear()
+                return None, None
+        # 週期必須已開始才能預測; 若週期資訊因窗口過期遺失,
+        # 以本次收縮起點重建週期, 不依賴外圈重置事件。
+        # 僅在「曾建立完整週期模型後過期」時直接恢復就緒;
+        # 初次啟動/一般情況仍須經 reset 分支的兩週期門檻。
+        if self._character_revive_cycle_started_at is None:
+            self._character_revive_cycle_started_at = now
+            self._character_revive_cycle_max_radius = radius
+            if self._character_revive_model_expired:
+                self._character_revive_model_ready = True
+                self._character_revive_model_expired = False
+            self._character_revive_shrink_history.append((now, radius))
+            return None, None
+        self._character_revive_shrink_history.append((now, radius))
+        if len(self._character_revive_shrink_history) > CHARACTER_REVIVE_PREDICT_FRAMES:
+            self._character_revive_shrink_history.pop(0)
+        if (
+            self._character_revive_cycle_max_radius is None
+            or radius > self._character_revive_cycle_max_radius
+        ):
+            self._character_revive_cycle_max_radius = radius
+        recent = self._character_revive_shrink_history
+        if (
+            len(recent) < CHARACTER_REVIVE_PREDICT_MIN_SAMPLES
+            or not self._character_revive_model_ready
+        ):
+            return None, None
+        # 預測目標: session 最小半徑; 未建立時(極端畫面環不停留)以中心(0)為目標
+        target_radius = self._character_revive_session_min_radius
+        if target_radius is None:
+            target_radius = 0.0
+        # 排除最小半徑附近的抖動: ring 必須已從本週期外圈實質收縮
+        if self._character_revive_cycle_max_radius is not None:
+            span = self._character_revive_cycle_max_radius - target_radius
+            if (
+                span > 0
+                and (self._character_revive_cycle_max_radius - radius)
+                < span * CHARACTER_REVIVE_PREDICT_MIN_CONTRACTION
+            ):
+                return None, None
+        times = np.array([entry[0] for entry in recent])
+        radii = np.array([entry[1] for entry in recent])
+        if times[-1] == times[0] or np.any(np.diff(radii) >= 0):
+            return None, None
+        velocity = float(np.polyfit(times - times[0], radii, 1)[0])
+        if (
+            velocity >= 0
+            or velocity < -CHARACTER_REVIVE_MAX_SHRINK_SPEED
+            or -velocity < CHARACTER_REVIVE_PREDICT_MIN_SPEED
+        ):
+            return None, None
+        remaining = radius - target_radius
+        if remaining <= 0:
+            # 已到達最小半徑(中心): 無需預測, 由 ring_at_min / ring_settled 處理
+            return None, None
+        return remaining / -velocity, velocity
 
     def _find_player_death_revive_box(self, screen):
         player_death_keywords = tuple(
@@ -963,14 +1611,20 @@ class DeathView(AI):
             or not self._has_character_death_signature(screen)
         ):
             return None
-        if (
-            self._mask_pixel_count(
+        if self._mask_pixel_count(
+            screen,
+            CHARACTER_TARGET_REGION,
+            CHARACTER_TARGET_HSV_LOWER,
+            CHARACTER_TARGET_HSV_UPPER,
+        ) > CHARACTER_TARGET_MIN_PIXELS and (
+            self._character_revive_target_disk(screen)[0] is not None
+            or self._mask_pixel_count(
                 screen,
                 CHARACTER_TARGET_REGION,
                 CHARACTER_TARGET_HSV_LOWER,
                 CHARACTER_TARGET_HSV_UPPER,
             )
-            > CHARACTER_TARGET_MIN_PIXELS
+            > CHARACTER_REVIVING_STRONG_TARGET_PIXELS
         ):
             return CHARACTER_DEATH_REVIVING
         return CHARACTER_DEATH_WAITING
@@ -987,30 +1641,82 @@ class DeathView(AI):
         hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
         crop_x = int(CHARACTER_EXIT_REGION[0] * width)
         crop_y = int(CHARACTER_EXIT_REGION[2] * height)
-        for lower, upper in (
-            (CHARACTER_EXIT_HSV_LOWER, CHARACTER_EXIT_HSV_UPPER),
-            (CHARACTER_EXIT_FALLBACK_HSV_LOWER, CHARACTER_EXIT_FALLBACK_HSV_UPPER),
-        ):
-            mask = cv2.inRange(hsv, lower, upper)
-            count, _, stats, _ = cv2.connectedComponentsWithStats(mask)
-            for component_x, component_y, component_width, component_height, _ in stats[
-                1:count
-            ]:
-                if (
-                    CHARACTER_EXIT_MIN_WIDTH * width
-                    <= component_width
-                    <= CHARACTER_EXIT_MAX_WIDTH * width
-                    and CHARACTER_EXIT_MIN_HEIGHT * height
-                    <= component_height
-                    <= CHARACTER_EXIT_MAX_HEIGHT * height
-                ):
-                    return (
-                        crop_x + component_x,
-                        crop_y + component_y,
-                        component_width,
-                        component_height,
-                    )
-        return None
+        # 只用高亮度白偵測退出按鈕。fallback(灰白)會誤判城鎮畫面的
+        # 按鍵提示 UI(Shift/Tab 等)為退出按鈕。
+        mask = cv2.inRange(hsv, CHARACTER_EXIT_HSV_LOWER, CHARACTER_EXIT_HSV_UPPER)
+        count, _, stats, _ = cv2.connectedComponentsWithStats(mask)
+        for component_x, component_y, component_width, component_height, _ in stats[
+            1:count
+        ]:
+            if (
+                CHARACTER_EXIT_MIN_WIDTH * width
+                <= component_width
+                <= CHARACTER_EXIT_MAX_WIDTH * width
+                and CHARACTER_EXIT_MIN_HEIGHT * height
+                <= component_height
+                <= CHARACTER_EXIT_MAX_HEIGHT * height
+            ):
+                return (
+                    crop_x + component_x,
+                    crop_y + component_y,
+                    component_width,
+                    component_height,
+                )
+        # 紅色 overlay 死亡畫面: 退出按鈕被染紅, 白框偵測失效。
+        # 以「低飽和亮色 + 近正方形按鈕形狀」偵測(排除扁長 UI 誤判)。
+        overlay_mask = cv2.inRange(
+            hsv,
+            CHARACTER_EXIT_REDOVERLAY_HSV_LOWER,
+            CHARACTER_EXIT_REDOVERLAY_HSV_UPPER,
+        )
+        count, _, stats, _ = cv2.connectedComponentsWithStats(overlay_mask)
+        best = None
+        best_area = 0
+        for (
+            component_x,
+            component_y,
+            component_width,
+            component_height,
+            component_area,
+        ) in stats[1:count]:
+            if not (
+                CHARACTER_EXIT_MIN_WIDTH * width
+                <= component_width
+                <= CHARACTER_EXIT_MAX_WIDTH * width
+                and CHARACTER_EXIT_MIN_HEIGHT * height
+                <= component_height
+                <= CHARACTER_EXIT_MAX_HEIGHT * height
+            ):
+                continue
+            aspect = component_width / max(component_height, 1)
+            if not (
+                CHARACTER_EXIT_REDOVERLAY_MIN_ASPECT
+                <= aspect
+                <= CHARACTER_EXIT_REDOVERLAY_MAX_ASPECT
+            ):
+                continue
+            # 組件必須有色彩: 灰階按鈕(如寶箱介面)不是死亡畫面的退出按鈕
+            component_mask = overlay_mask[
+                component_y : component_y + component_height,
+                component_x : component_x + component_width,
+            ]
+            component_hsv = hsv[
+                component_y : component_y + component_height,
+                component_x : component_x + component_width,
+            ]
+            if component_mask.sum() > 0:
+                mean_sat = float(component_hsv[component_mask > 0, 1].mean())
+                if mean_sat < CHARACTER_EXIT_REDOVERLAY_MIN_SATURATION:
+                    continue
+            if component_area > best_area:
+                best_area = component_area
+                best = (
+                    crop_x + component_x,
+                    crop_y + component_y,
+                    component_width,
+                    component_height,
+                )
+        return best
 
     def _has_character_revive_scene(self, screen, exit_box=None) -> bool:
         """Detect the character revive ring scene even without the waiting
@@ -1024,30 +1730,68 @@ class DeathView(AI):
             screen
         )
         if (
-            target_radius is None
-            or target_confidence < CHARACTER_REVIVE_DIRECT_TARGET_MIN_CONFIDENCE
-            or not (
-                CHARACTER_REVIVE_DIRECT_TARGET_MIN_RADIUS * height
-                <= target_radius
-                <= CHARACTER_TARGET_MAX_RADIUS * height
+            target_radius is not None
+            and target_confidence >= CHARACTER_REVIVE_DIRECT_TARGET_MIN_CONFIDENCE
+            and CHARACTER_REVIVE_DIRECT_TARGET_MIN_RADIUS * height
+            <= target_radius
+            <= CHARACTER_TARGET_MAX_RADIUS * height
+        ):
+            target_tolerance = max(
+                CHARACTER_TARGET_MIN_TOLERANCE,
+                target_radius * CHARACTER_TARGET_TOLERANCE_RATIO,
             )
+            ring_radius, ring_confidence = self._character_revive_ring_measurement(
+                screen,
+                time.monotonic(),
+                target_radius + target_tolerance,
+            )
+            return (
+                ring_radius is not None
+                and ring_confidence >= CHARACTER_REVIVE_SCORE_THRESHOLD
+            )
+        # Target is not measurable in some ring variants (the yellow center is
+        # too faint/dark). Fall back to exit-box + ring presence: the observe
+        # loop itself guards clicks with shrink/settled evidence, so starting
+        # the session here is safe.
+        if not self._has_character_ring(screen):
+            return False
+        ring_radius, ring_confidence = self._character_revive_ring_measurement(
+            screen, time.monotonic(), CHARACTER_REVIVE_RING_MIN_RADIUS
+        )
+        if ring_radius is None:
+            return False
+        # 死亡等待畫面的環測量常落在中心偽影(r6 = 測量下限): 那是靜態
+        # 角色光效, 不是收縮中的復活圓環。要求測到實質半徑(> 下限 + 餘裕)
+        # 才視為復活圓環; 復活圓環收縮中段半徑遠大於此, 不影響。
+        if (
+            ring_radius
+            <= CHARACTER_REVIVE_RING_MIN_RADIUS + CHARACTER_REVIVE_SCENE_MIN_RING_MARGIN
         ):
             return False
-        target_tolerance = max(
-            CHARACTER_TARGET_MIN_TOLERANCE,
-            target_radius * CHARACTER_TARGET_TOLERANCE_RATIO,
-        )
-        ring_radius, ring_confidence = self._character_revive_ring_measurement(
-            screen,
-            time.monotonic(),
-            target_radius + target_tolerance,
-        )
-        return (
-            ring_radius is not None
-            and ring_confidence >= CHARACTER_REVIVE_SCORE_THRESHOLD
-        )
+        return ring_confidence >= CHARACTER_REVIVE_SCORE_THRESHOLD
 
     def _has_character_ring(self, screen) -> bool:
+        # 復活圓環是「空心環」: 藍色像素集中在圓周，中心區域幾乎無藍色。
+        # 城鎮畫面的藍色天空/圓形 UI 會讓中心也大量藍色，故中心空心是
+        # 藍色捷徑與 fallback 圓周檢查的共同前置條件。
+        center_pixels = self._mask_pixel_count(
+            screen,
+            CHARACTER_RING_CENTER_REGION,
+            CHARACTER_RING_HSV_LOWER,
+            CHARACTER_RING_HSV_UPPER,
+        )
+        ring_pixels = self._mask_pixel_count(
+            screen,
+            CHARACTER_RING_REGION,
+            CHARACTER_RING_HSV_LOWER,
+            CHARACTER_RING_HSV_UPPER,
+        )
+        center_is_hollow = center_pixels <= CHARACTER_RING_CENTER_MAX_PIXELS or (
+            ring_pixels > 0
+            and center_pixels / ring_pixels <= CHARACTER_RING_CENTER_MAX_RATIO
+        )
+        if not center_is_hollow:
+            return False
         if (
             self._mask_pixel_count(
                 screen,
@@ -1083,7 +1827,19 @@ class DeathView(AI):
             (saturation <= CHARACTER_RING_FALLBACK_MAX_SATURATION)
             & (value >= CHARACTER_RING_FALLBACK_MIN_VALUE)
         ).mean(axis=1)
-        return bool(np.any(coverage >= CHARACTER_RING_FALLBACK_MIN_ANGULAR_COVERAGE))
+        if np.any(coverage >= CHARACTER_RING_FALLBACK_MIN_ANGULAR_COVERAGE):
+            return True
+        # 紅色 overlay 死亡畫面: 圓環被紅色特效染紅, 白/低飽和環偵測失效。
+        # 用紅色圓周覆蓋偵測。誤判風險由 character_death_state 的
+        # exit_box 與死亡特徵(紅色 overlay / 低 target 像素)把關:
+        # 非死亡畫面(城鎮/暫停等)通常無退出按鈕, 不會被判定為死亡。
+        hue = hsv[ys, xs, 0]
+        red_coverage = (
+            ((hue < CHARACTER_RING_RED_HUE_MAX) | (hue >= CHARACTER_RING_RED_HUE_MIN))
+            & (saturation >= CHARACTER_RING_RED_MIN_SATURATION)
+            & (value >= CHARACTER_RING_RED_MIN_VALUE)
+        ).mean(axis=1)
+        return bool(np.any(red_coverage >= CHARACTER_RING_RED_MIN_ANGULAR_COVERAGE))
 
     def _mask_pixel_count(self, screen, region, lower, upper) -> int:
         crop, _, _ = self._crop_normalized(screen, region)

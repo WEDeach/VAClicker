@@ -9,22 +9,109 @@ from ...ocr import parse_ocr_boxes
 from ...utils.clicker import calculate_click_point, click_at
 from ...utils.image import load_template, match_template
 from ...utils.shared import state
-from ...utils.window import get_window_screen
+from ...utils.window import get_window_rect, get_window_screen
 
 BLESSING_MENU_REGION = (0.30, 0.70, 0.40, 0.82)
-BLESSING_TEXT = "加護"
+BLESSING_ROW_REGIONS = (
+    (0.35, 0.65, 0.60, 0.66),
+    (0.35, 0.65, 0.67, 0.73),
+    (0.35, 0.65, 0.74, 0.80),
+)
+BLESSING_NOTHING_REGION = (0.35, 0.65, 0.84, 0.90)
+BLESSING_NOTHING_TEXT = "都不做"
+# 回歸選單防呆: 同時有「什麼都不做」與「歸還/回歸」時屬於回歸畫面, 不是加護選單
+RETURN_MARKER_REGION = (0.24, 0.76, 0.50, 0.80)
+RETURN_MARKER_KEYWORDS = ("歸還", "回歸")
 
 BLESSING_WHITE_TIER = 0
 BLESSING_GREEN_TIER = 1
 BLESSING_BLUE_TIER = 2
+BLESSING_PURPLE_TIER = 3
+BLESSING_RED_TIER = 4
 
+BLESSING_INFO_ICON_TEXT = frozenset({"i", "1", "l", "|"})
 WHITE_MAX_SATURATION = 60
 WHITE_MIN_VALUE = 180
 GREEN_HUE_RANGE = (35, 85)
 BLUE_HUE_RANGE = (95, 130)
+PURPLE_HUE_RANGE = (131, 169)
+RED_HUE_RANGES = ((0, 15), (170, 179))
 COLOR_MIN_SATURATION = 80
 COLOR_MIN_VALUE = 80
 MIN_COLOR_PIXEL_RATIO = 0.05
+
+
+def _normalise_blessing_text(text) -> str:
+    if text is None:
+        return ""
+    text = "".join(str(text).split())
+    if not text or text.casefold() in BLESSING_INFO_ICON_TEXT:
+        return ""
+    if not any(
+        "\u3400" <= char <= "\u4dbf"
+        or "\u4e00" <= char <= "\u9fff"
+        or "\uf900" <= char <= "\ufaff"
+        for char in text
+    ):
+        return ""
+    return text
+
+
+def _bounded_blessing_box(box, crop_shape, screen_shape, offset):
+    try:
+        if not isinstance(box, (tuple, list, np.ndarray)) or len(box) != 4:
+            return None
+        values = [float(value) for value in box]
+        if not all(np.isfinite(value) for value in values):
+            return None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+    crop_height, crop_width = crop_shape[:2]
+    if not (
+        0 <= values[0] <= crop_width
+        and 0 <= values[1] <= crop_height
+        and 0 <= values[2] <= crop_width
+        and 0 <= values[3] <= crop_height
+    ):
+        return None
+
+    converted = [int(round(value)) for value in values]
+    local_x1, local_y1, local_x2, local_y2 = converted
+    if not (
+        0 <= local_x1 <= crop_width
+        and 0 <= local_y1 <= crop_height
+        and 0 <= local_x2 <= crop_width
+        and 0 <= local_y2 <= crop_height
+        and local_x2 > local_x1
+        and local_y2 > local_y1
+    ):
+        return None
+
+    full_x1, full_y1 = offset[0] + local_x1, offset[1] + local_y1
+    full_x2, full_y2 = offset[0] + local_x2, offset[1] + local_y2
+    screen_height, screen_width = screen_shape[:2]
+    if not (
+        0 <= full_x1 < full_x2 <= screen_width
+        and 0 <= full_y1 < full_y2 <= screen_height
+    ):
+        return None
+    return full_x1, full_y1, full_x2, full_y2
+
+
+def _choose_blessing_candidate(candidates):
+    if not candidates:
+        return None
+    meaningful = []
+    for candidate in candidates:
+        if not isinstance(candidate, (tuple, list)) or len(candidate) != 2:
+            continue
+        text = _normalise_blessing_text(candidate[0])
+        if text:
+            meaningful.append((text, candidate[1]))
+    if len(meaningful) != 1:
+        return None
+    return meaningful[0]
 
 
 class Return(AI):
@@ -66,40 +153,61 @@ class Return(AI):
         return self._select_blessing(_screen)
 
     def _select_blessing(self, screen: np.ndarray) -> bool:
-        h, w = screen.shape[:2]
-        x1f, x2f, y1f, y2f = BLESSING_MENU_REGION
-        x1, x2 = int(x1f * w), int(x2f * w)
-        y1, y2 = int(y1f * h), int(y2f * h)
-        crop = screen[y1:y2, x1:x2]
-        if crop.size == 0:
+        if state.ocr is None:
+            state.logger.debug("[Return] blessing OCR skipped: state.ocr is None")
             return False
 
-        boxes = parse_ocr_boxes(state.ocr.predict(crop))
-        candidates = [(text, box) for text, box in boxes if BLESSING_TEXT in text]
-        if not candidates:
+        if not self._has_blessing_nothing_button(screen):
             return False
 
-        ranked = []
-        for text, (bx1, by1, bx2, by2) in candidates:
-            full_x1, full_y1 = x1 + bx1, y1 + by1
-            full_x2, full_y2 = x1 + bx2, y1 + by2
+        return_box = self._has_return_marker(screen)
+        if return_box is not False:
+            if return_box is not None:
+                self._click_return_menu(return_box)
+            return True
+
+        selected_rows = []
+        filled_rows = []
+        invalid_rows = []
+        for row_number, region in enumerate(BLESSING_ROW_REGIONS, start=1):
+            selected = self._select_blessing_row(screen, row_number, region)
+            if selected is None:
+                invalid_rows.append(row_number)
+                continue
+            text, (full_x1, full_y1, full_x2, full_y2) = selected
             tier, color_info = self._classify_tier(
                 screen[full_y1:full_y2, full_x1:full_x2]
             )
             if tier is None:
+                invalid_rows.append(row_number)
                 state.logger.debug(
-                    "[Return] 無法辨識加護顏色，跳過候選: %s (%s)", text, color_info
+                    "[Return] 無法辨識加護顏色，跳過列: row=%d %s (%s)",
+                    row_number,
+                    text,
+                    color_info,
                 )
                 continue
-            state.logger.debug(
-                "[Return] 辨識加護顏色: %s -> tier=%d (%s)", text, tier, color_info
-            )
-            ranked.append((tier, text, (full_x1, full_y1, full_x2, full_y2)))
 
-        if not ranked:
-            state.logger.warning("[Return] 找不到有效的加護候選")
+            filled_rows.append(row_number)
+            selected_rows.append((row_number, tier, text, selected[1]))
+            state.logger.debug(
+                "[Return] 辨識加護顏色: row=%d %s -> tier=%d (%s)",
+                row_number,
+                text,
+                tier,
+                color_info,
+            )
+
+        state.logger.debug(
+            "[Return] blessing filled rows: %s; invalid rows: %s",
+            filled_rows,
+            invalid_rows,
+        )
+        if invalid_rows or len(selected_rows) != len(BLESSING_ROW_REGIONS):
+            state.logger.warning("[Return] blessing menu incomplete or ambiguous")
             return False
 
+        ranked = [(tier, text, box) for _, tier, text, box in selected_rows]
         top_tier = max(tier for tier, _, _ in ranked)
         top_candidates = [c for c in ranked if c[0] == top_tier]
         state.logger.debug(
@@ -118,6 +226,144 @@ class Return(AI):
         click_at(point)
         time.sleep(self.delay_blessing)
         return True
+
+    def _has_blessing_nothing_button(self, screen) -> bool:
+        height, width = screen.shape[:2]
+        x1f, x2f, y1f, y2f = BLESSING_NOTHING_REGION
+        x1, x2 = int(x1f * width), int(x2f * width)
+        y1, y2 = int(y1f * height), int(y2f * height)
+        crop = screen[y1:y2, x1:x2]
+        if crop.size == 0:
+            state.logger.debug(
+                "[Return] blessing menu gate skipped: empty crop "
+                "region=(%.3f, %.3f, %.3f, %.3f)",
+                x1f,
+                x2f,
+                y1f,
+                y2f,
+            )
+            return False
+        try:
+            boxes = parse_ocr_boxes(state.ocr.predict(crop))
+            box_items = list(boxes or [])
+        except Exception:
+            state.logger.warning("[Return] blessing menu gate OCR failed")
+            return False
+        for item in box_items:
+            if not isinstance(item, (tuple, list)) or len(item) != 2:
+                continue
+            text = _normalise_blessing_text(item[0])
+            if text and BLESSING_NOTHING_TEXT in text:
+                state.logger.debug("[Return] blessing menu gate found: %s", text)
+                return True
+        return False
+
+    def _click_return_menu(self, box) -> None:
+        left, top, _, _ = get_window_rect()
+        x1, y1, x2, y2 = box
+        state.logger.info("偵測到回歸選單，點擊歸還")
+        click_at((left + (x1 + x2) // 2, top + (y1 + y2) // 2))
+        time.sleep(self.delay_return)
+        self.increment_battle()
+
+    def _has_return_marker(self, screen):
+        """Return the return menu marker box when confirmed present.
+
+        Returns None when the marker cannot be checked (OCR unavailable,
+        empty crop, or OCR failure) so callers fail closed instead of
+        proceeding to blessing selection.
+        """
+        if state.ocr is None:
+            return None
+        height, width = screen.shape[:2]
+        x1f, x2f, y1f, y2f = RETURN_MARKER_REGION
+        x1, x2 = int(x1f * width), int(x2f * width)
+        y1, y2 = int(y1f * height), int(y2f * height)
+        crop = screen[y1:y2, x1:x2]
+        if crop.size == 0:
+            state.logger.warning("[Return] return marker region empty")
+            return None
+        try:
+            boxes = parse_ocr_boxes(state.ocr.predict(crop))
+            box_items = list(boxes or [])
+        except Exception:
+            state.logger.warning("[Return] return marker OCR failed")
+            return None
+        for item in box_items:
+            if not isinstance(item, (tuple, list)) or len(item) != 2:
+                continue
+            text = _normalise_blessing_text(item[0])
+            if text and any(keyword in text for keyword in RETURN_MARKER_KEYWORDS):
+                state.logger.debug("[Return] return menu marker found: %s", text)
+                return (
+                    x1 + item[1][0],
+                    y1 + item[1][1],
+                    x1 + item[1][2],
+                    y1 + item[1][3],
+                )
+        state.logger.debug(
+            "[Return] return menu marker not found: boxes=%d texts=%s",
+            len(box_items),
+            [item[0] for item in box_items if isinstance(item, (tuple, list))],
+        )
+        return False
+
+    def _select_blessing_row(self, screen, row_number, region):
+        height, width = screen.shape[:2]
+        x1f, x2f, y1f, y2f = region
+        x1, x2 = int(x1f * width), int(x2f * width)
+        y1, y2 = int(y1f * height), int(y2f * height)
+        crop = screen[y1:y2, x1:x2]
+        if crop.size == 0:
+            state.logger.debug(
+                "[Return] blessing row=%d skipped OCR: empty crop "
+                "region=(%.3f, %.3f, %.3f, %.3f)",
+                row_number,
+                x1f,
+                x2f,
+                y1f,
+                y2f,
+            )
+            return None
+
+        try:
+            boxes = parse_ocr_boxes(state.ocr.predict(crop))
+            box_items = list(boxes or [])
+        except Exception:
+            state.logger.warning("[Return] blessing row=%d OCR failed", row_number)
+            return None
+
+        row_candidates = []
+        malformed_boxes = False
+        for item in box_items:
+            if not isinstance(item, (tuple, list)) or len(item) != 2:
+                malformed_boxes = True
+                continue
+            text, box = item
+            full_box = _bounded_blessing_box(box, crop.shape, screen.shape, (x1, y1))
+            if full_box is None:
+                malformed_boxes = True
+                continue
+            text = _normalise_blessing_text(text)
+            if text:
+                row_candidates.append((text, full_box))
+
+        selected = None
+        if not malformed_boxes:
+            selected = _choose_blessing_candidate(row_candidates)
+
+        state.logger.debug(
+            "[Return] blessing row=%d OCR: crop=%s boxes=%d usable=%d "
+            "filled=%s malformed=%s texts=%s",
+            row_number,
+            crop.shape,
+            len(box_items),
+            len(row_candidates),
+            bool(selected),
+            malformed_boxes,
+            [text for text, _ in row_candidates],
+        )
+        return selected
 
     def _classify_tier(self, box_bgr: np.ndarray):
         if box_bgr.size == 0:
@@ -139,31 +385,57 @@ class Return(AI):
             & (sat >= COLOR_MIN_SATURATION)
             & (val >= COLOR_MIN_VALUE)
         )
+        purple_mask = (
+            (hue >= PURPLE_HUE_RANGE[0])
+            & (hue <= PURPLE_HUE_RANGE[1])
+            & (sat >= COLOR_MIN_SATURATION)
+            & (val >= COLOR_MIN_VALUE)
+        )
+        red_hue_mask = (
+            (hue >= RED_HUE_RANGES[0][0]) & (hue <= RED_HUE_RANGES[0][1])
+        ) | ((hue >= RED_HUE_RANGES[1][0]) & (hue <= RED_HUE_RANGES[1][1]))
+        red_mask = (
+            red_hue_mask & (sat >= COLOR_MIN_SATURATION) & (val >= COLOR_MIN_VALUE)
+        )
 
         counts = {
-            BLESSING_BLUE_TIER: int(np.count_nonzero(blue_mask)),
-            BLESSING_GREEN_TIER: int(np.count_nonzero(green_mask)),
             BLESSING_WHITE_TIER: int(np.count_nonzero(white_mask)),
+            BLESSING_GREEN_TIER: int(np.count_nonzero(green_mask)),
+            BLESSING_BLUE_TIER: int(np.count_nonzero(blue_mask)),
+            BLESSING_PURPLE_TIER: int(np.count_nonzero(purple_mask)),
+            BLESSING_RED_TIER: int(np.count_nonzero(red_mask)),
         }
-        best_tier = max(counts, key=counts.get)
-        best_count = counts[best_tier]
+        best_count = max(counts.values())
+        if best_count == 0:
+            best_tier = BLESSING_BLUE_TIER
+            tied_tiers = False
+        else:
+            best_tiers = [tier for tier, count in counts.items() if count == best_count]
+            tied_tiers = len(best_tiers) > 1
+            best_tier = best_tiers[0] if not tied_tiers else None
         best_name = {
             BLESSING_WHITE_TIER: "白",
             BLESSING_GREEN_TIER: "綠",
             BLESSING_BLUE_TIER: "藍",
-        }[best_tier]
+            BLESSING_PURPLE_TIER: "紫",
+            BLESSING_RED_TIER: "紅",
+        }.get(best_tier, "平手")
         white = counts[BLESSING_WHITE_TIER]
         green = counts[BLESSING_GREEN_TIER]
         blue = counts[BLESSING_BLUE_TIER]
+        purple = counts[BLESSING_PURPLE_TIER]
+        red = counts[BLESSING_RED_TIER]
         best_ratio = best_count / total
         color_info = (
             f"白={white}({white / total * 100:.1f}%) "
             f"綠={green}({green / total * 100:.1f}%) "
             f"藍={blue}({blue / total * 100:.1f}%) "
+            f"紫={purple}({purple / total * 100:.1f}%) "
+            f"紅={red}({red / total * 100:.1f}%) "
             f"總={total} 最高={best_name}({best_ratio:.2%}) "
             f"閾值={MIN_COLOR_PIXEL_RATIO:.2%}"
         )
-        if best_ratio < MIN_COLOR_PIXEL_RATIO:
+        if best_ratio < MIN_COLOR_PIXEL_RATIO or tied_tiers:
             return None, color_info
         return best_tier, color_info
 
